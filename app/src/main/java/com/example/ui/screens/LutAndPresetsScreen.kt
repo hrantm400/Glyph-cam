@@ -21,7 +21,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -31,6 +30,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -61,6 +61,7 @@ import com.example.ui.theme.NothingBorder
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingSilver
 import com.example.ui.theme.NothingSurface
+import com.example.ui.theme.NothingSurfaceHigh
 import com.example.ui.theme.NothingWhite
 import com.example.ui.theme.ScopeAmber
 import com.example.ui.theme.ScopeCyan
@@ -73,8 +74,8 @@ fun LutAndPresetsScreen(
     state: ProCameraUiState,
     presets: List<CameraPresetEntity>,
     onSelectLut: (LutProfile) -> Unit,
-    onUpdateGrade: (Float, Float, Float, Float, Float) -> Unit,
-    onToggleSplitCompare: () -> Unit,
+    onUpdateGrade: (Float, Float, Float, Float) -> Unit,
+    onToggleBake: () -> Unit,
     onResetGrade: () -> Unit,
     onSavePreset: (String) -> Unit,
     onApplyPreset: (CameraPresetEntity) -> Unit,
@@ -93,17 +94,10 @@ fun LutAndPresetsScreen(
     ) {
         StudioHeader(
             title = "LUT и цвет",
-            subtitle = "3D LUT · ГРЕЙДИНГ · ПРЕСЕТЫ C1–C9",
+            subtitle = "ЦВЕТОВЫЕ ПРОФИЛИ · ГРЕЙДИНГ · ПРЕСЕТЫ",
             onBack = onBackToCamera,
             backTag = "lut_back_btn"
         ) {
-            HeaderIconButton(
-                icon = Icons.Default.Compare,
-                contentDescription = "Сравнить до и после",
-                active = state.splitScreenLutCompare,
-                onClick = onToggleSplitCompare,
-                tag = "btn_split_lut_compare"
-            )
             HeaderIconButton(
                 icon = Icons.Default.Refresh,
                 contentDescription = "Сбросить грейдинг",
@@ -122,8 +116,51 @@ fun LutAndPresetsScreen(
         ) {
             LutCalibrationPreviewCard(state = state)
 
+            Spacer(modifier = Modifier.height(10.dp))
+            NothingCard(
+                onClick = onToggleBake,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("switch_bake_lut")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Впечатывать LUT в JPEG",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = NothingWhite
+                        )
+                        Text(
+                            text = if (state.bakeLutIntoPhotos) {
+                                "Фото сохраняются уже с цветом профиля (EXIF сохраняется). RAW и видео остаются чистыми: для них LUT только мониторинг."
+                            } else {
+                                "Фото сохраняются без обработки, LUT виден только в видоискателе."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NothingSilver
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Switch(
+                        checked = state.bakeLutIntoPhotos,
+                        onCheckedChange = { onToggleBake() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = NothingBlack,
+                            checkedTrackColor = NothingWhite,
+                            uncheckedThumbColor = NothingSilver,
+                            uncheckedTrackColor = NothingSurfaceHigh,
+                            uncheckedBorderColor = NothingBorder
+                        )
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(18.dp))
-            SectionLabel(text = "Кинопрофили · 3D LUT")
+            SectionLabel(text = "Цветовые профили")
             Spacer(modifier = Modifier.height(8.dp))
 
             LutProfile.entries.forEach { lut ->
@@ -143,13 +180,7 @@ fun LutAndPresetsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .width(4.dp)
-                                .height(36.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(if (selected) accent else accent.copy(alpha = 0.45f))
-                        )
+                        LutSwatchStrip(lut = lut, modifier = Modifier.size(width = 44.dp, height = 36.dp))
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Row(
@@ -186,9 +217,7 @@ fun LutAndPresetsScreen(
                     label = "Контраст",
                     valueText = String.format(Locale.US, "%d%%", (state.userContrast * 100).toInt()),
                     value = state.userContrast,
-                    onValueChange = {
-                        onUpdateGrade(it, state.userSaturation, state.shadowLift, state.highlightRollOff, state.filmGrainAmount)
-                    },
+                    onValueChange = { onUpdateGrade(it, state.userSaturation, state.shadowLift, state.highlightRollOff) },
                     valueRange = 0.5f..1.5f,
                     accent = NothingWhite
                 )
@@ -196,9 +225,7 @@ fun LutAndPresetsScreen(
                     label = "Насыщенность",
                     valueText = String.format(Locale.US, "%d%%", (state.userSaturation * 100).toInt()),
                     value = state.userSaturation,
-                    onValueChange = {
-                        onUpdateGrade(state.userContrast, it, state.shadowLift, state.highlightRollOff, state.filmGrainAmount)
-                    },
+                    onValueChange = { onUpdateGrade(state.userContrast, it, state.shadowLift, state.highlightRollOff) },
                     valueRange = 0.0f..1.8f,
                     accent = ScopeCyan
                 )
@@ -206,9 +233,7 @@ fun LutAndPresetsScreen(
                     label = "Подъём теней",
                     valueText = String.format(Locale.US, "%+.2f", state.shadowLift),
                     value = state.shadowLift,
-                    onValueChange = {
-                        onUpdateGrade(state.userContrast, state.userSaturation, it, state.highlightRollOff, state.filmGrainAmount)
-                    },
+                    onValueChange = { onUpdateGrade(state.userContrast, state.userSaturation, it, state.highlightRollOff) },
                     valueRange = -0.4f..0.4f,
                     accent = ScopeGreen
                 )
@@ -216,28 +241,16 @@ fun LutAndPresetsScreen(
                     label = "Мягкие света",
                     valueText = String.format(Locale.US, "%d%%", (state.highlightRollOff * 100).toInt()),
                     value = state.highlightRollOff,
-                    onValueChange = {
-                        onUpdateGrade(state.userContrast, state.userSaturation, state.shadowLift, it, state.filmGrainAmount)
-                    },
+                    onValueChange = { onUpdateGrade(state.userContrast, state.userSaturation, state.shadowLift, it) },
                     valueRange = 0.0f..1.0f,
                     accent = ScopeAmber
-                )
-                LabelledSlider(
-                    label = "Плёночное зерно",
-                    valueText = String.format(Locale.US, "%d%%", (state.filmGrainAmount * 100).toInt()),
-                    value = state.filmGrainAmount,
-                    onValueChange = {
-                        onUpdateGrade(state.userContrast, state.userSaturation, state.shadowLift, state.highlightRollOff, it)
-                    },
-                    valueRange = 0.0f..1.0f,
-                    accent = NothingRed
                 )
             }
 
             Spacer(modifier = Modifier.height(20.dp))
             SectionLabel(
                 text = "Пресеты камеры",
-                trailing = "${presets.size} / 9",
+                trailing = "${presets.size}",
                 trailingColor = NothingWhite
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -252,7 +265,7 @@ fun LutAndPresetsScreen(
                     onValueChange = { newPresetName = it },
                     placeholder = {
                         Text(
-                            text = "Название рига",
+                            text = "Название пресета",
                             style = MaterialTheme.typography.bodyMedium,
                             color = NothingSilver
                         )
@@ -287,12 +300,18 @@ fun LutAndPresetsScreen(
                     Text("СОХРАНИТЬ", style = MaterialTheme.typography.labelLarge)
                 }
             }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Пресет запоминает объектив, ISO, выдержку, баланс белого, EV, профиль, рамку, Glyph и параметры видео.",
+                style = MaterialTheme.typography.labelSmall,
+                color = NothingSilver
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
             if (presets.isEmpty()) {
                 Text(
-                    text = "Пресетов пока нет. Настройте камеру и сохраните риг под своим именем.",
+                    text = "Пресетов пока нет. Настройте камеру и сохраните её состояние под своим именем.",
                     style = MaterialTheme.typography.bodySmall,
                     color = NothingSilver
                 )
@@ -319,11 +338,7 @@ fun LutAndPresetsScreen(
                                 .border(1.dp, NothingRed, RoundedCornerShape(10.dp)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = preset.slotCode,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = NothingWhite
-                            )
+                            Text(text = preset.slotCode, style = MaterialTheme.typography.labelLarge, color = NothingWhite)
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -335,7 +350,7 @@ fun LutAndPresetsScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${if (preset.isVideoPreset) "CINE" else "PHOTO"} · ISO ${if (preset.isoValue == 0) "AUTO" else preset.isoValue} · ${preset.wbKelvin}K · ${preset.anamorphicLabel}",
+                                text = presetSummary(preset),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = NothingSilver,
                                 maxLines = 1,
@@ -356,6 +371,19 @@ fun LutAndPresetsScreen(
                 }
             }
         }
+    }
+}
+
+private fun presetSummary(preset: CameraPresetEntity): String {
+    val lut = LutProfile.entries.find { it.id == preset.lutId }?.code ?: preset.lutId
+    val iso = if (preset.isoValue == 0) "ISO AUTO" else "ISO ${preset.isoValue}"
+    val zoom = String.format(Locale.US, "%.1f×", preset.zoomRatio)
+    val wb = if (preset.awbPreset == "AUTO") "AWB" else preset.awbPreset
+    return if (preset.isVideoPreset) {
+        val res = preset.videoResolution.removePrefix("UHD_").removePrefix("FHD_").removePrefix("HD_")
+        "ВИДЕО · $res/${preset.videoFps} · $zoom · $iso · $wb · $lut"
+    } else {
+        "ФОТО · $zoom · $iso · $wb · EV ${String.format(Locale.US, "%+.1f", preset.evCompensation)} · $lut"
     }
 }
 
@@ -386,8 +414,55 @@ private fun HeaderIconButton(
     }
 }
 
+/** ColorChecker-like patches pushed through the real 4×5 matrix the preview and JPEGs use. */
+private val ReferencePatches = listOf(
+    Color(0xFFC29682), // light skin
+    Color(0xFF735244), // dark skin
+    Color(0xFF627A9D), // sky
+    Color(0xFF00A6B4), // teal
+    Color(0xFFE07A3C), // amber
+    Color(0xFFD71921), // red
+    Color(0xFF479458), // foliage
+    Color(0xFF383D96), // cobalt
+    Color(0xFF1A1A1A),
+    Color(0xFF555555),
+    Color(0xFF9A9A9A),
+    Color(0xFFE8E8E8)
+)
+
+/** Applies an Android-layout colour matrix (row-major 4×5, translation in 0..255) to one colour. */
+fun applyColorMatrix(color: Color, m: FloatArray?): Color {
+    if (m == null || m.size < 20) return color
+    val r = color.red * 255f
+    val g = color.green * 255f
+    val b = color.blue * 255f
+    val a = color.alpha * 255f
+    val nr = (m[0] * r + m[1] * g + m[2] * b + m[3] * a + m[4]) / 255f
+    val ng = (m[5] * r + m[6] * g + m[7] * b + m[8] * a + m[9]) / 255f
+    val nb = (m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14]) / 255f
+    return Color(nr.coerceIn(0f, 1f), ng.coerceIn(0f, 1f), nb.coerceIn(0f, 1f), color.alpha)
+}
+
+@Composable
+private fun LutSwatchStrip(lut: LutProfile, modifier: Modifier = Modifier) {
+    val matrix = remember(lut) { if (lut.isIdentity) null else lut.buildColorMatrix().values }
+    Canvas(modifier = modifier.clip(RoundedCornerShape(6.dp))) {
+        val patches = ReferencePatches.take(8)
+        val cellW = size.width / 4
+        val cellH = size.height / 2
+        patches.forEachIndexed { idx, base ->
+            drawRect(
+                color = applyColorMatrix(base, matrix),
+                topLeft = Offset((idx % 4) * cellW, (idx / 4) * cellH),
+                size = Size(cellW + 0.5f, cellH + 0.5f)
+            )
+        }
+    }
+}
+
 @Composable
 private fun LutCalibrationPreviewCard(state: ProCameraUiState) {
+    val matrix = state.lutColorMatrix
     NothingCard(contentPadding = PaddingValues(12.dp), modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -395,7 +470,7 @@ private fun LutCalibrationPreviewCard(state: ProCameraUiState) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "КАЛИБРОВКА · ${state.activeLut.code}",
+                text = "${state.activeLut.nameRu} · ${state.activeLut.code}",
                 style = MaterialTheme.typography.labelMedium,
                 color = NothingWhite,
                 maxLines = 1,
@@ -404,7 +479,7 @@ private fun LutCalibrationPreviewCard(state: ProCameraUiState) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (state.splitScreenLutCompare) "SPLIT" else "FULL",
+                text = if (matrix == null) "БЕЗ ИЗМЕНЕНИЙ" else if (state.bakeLutIntoPhotos) "ПРЕВЬЮ + JPEG" else "ТОЛЬКО ПРЕВЬЮ",
                 style = MaterialTheme.typography.labelMedium,
                 color = ScopeAmber
             )
@@ -413,54 +488,39 @@ private fun LutCalibrationPreviewCard(state: ProCameraUiState) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(72.dp)
+                .height(84.dp)
                 .clip(RoundedCornerShape(10.dp))
         ) {
             val w = size.width
             val h = size.height
-            // ColorChecker-style cinema swatches + grayscale ramp
-            val patches = listOf(
-                Color(0xFFC29682), // Light Skin
-                Color(0xFF735244), // Dark Skin
-                Color(0xFF627A9D), // Foliage/Sky
-                Color(0xFF00A6B4), // Teal
-                Color(0xFFE07A3C), // Warm Amber
-                Color(0xFFD71921), // Nothing Crimson
-                Color(0xFF479458), // Green
-                Color(0xFF383D96)  // Cobalt
-            )
-            val patchW = w / patches.size
-            val topH = h * 0.65f
-            patches.forEachIndexed { idx, baseColor ->
-                val sat = (state.activeLut.baseSaturation * state.userSaturation).coerceIn(0f, 1.8f)
-                val gray = baseColor.red * 0.299f + baseColor.green * 0.587f + baseColor.blue * 0.114f
-                val r = (gray + (baseColor.red - gray) * sat + state.activeLut.warmShift * 0.2f).coerceIn(0f, 1f)
-                val g = (gray + (baseColor.green - gray) * sat).coerceIn(0f, 1f)
-                val b = (gray + (baseColor.blue - gray) * sat + state.activeLut.tealShift * 0.2f).coerceIn(0f, 1f)
+            val colorPatches = ReferencePatches.take(8)
+            val patchW = w / colorPatches.size
+            val topH = h * 0.6f
+            colorPatches.forEachIndexed { idx, base ->
                 drawRect(
-                    color = Color(r, g, b),
+                    color = applyColorMatrix(base, matrix),
                     topLeft = Offset(idx * patchW, 0f),
                     size = Size(patchW + 1f, topH)
                 )
             }
-            drawRect(
-                brush = Brush.horizontalGradient(
-                    listOf(
-                        Color.Black.copy(alpha = (1f - state.shadowLift.coerceAtLeast(0f)).coerceIn(0.4f, 1f)),
-                        Color.Gray,
-                        Color.White.copy(alpha = (1f - state.highlightRollOff * 0.25f).coerceIn(0.6f, 1f))
-                    )
-                ),
-                topLeft = Offset(0f, topH),
-                size = Size(w, h - topH)
-            )
+            val steps = 16
+            val stepW = w / steps
+            for (i in 0 until steps) {
+                val v = i / (steps - 1f)
+                val gray = Color(v, v, v)
+                drawRect(
+                    color = applyColorMatrix(gray, matrix),
+                    topLeft = Offset(i * stepW, topH),
+                    size = Size(stepW + 1f, h - topH)
+                )
+            }
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = state.activeLut.nameRu,
+            text = "Сверху: контрольные цвета, снизу: серая шкала. Так же профиль ляжет на живое превью и на JPEG.",
             style = MaterialTheme.typography.labelSmall,
             color = NothingSilver,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
     }

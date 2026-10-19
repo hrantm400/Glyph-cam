@@ -68,48 +68,26 @@ fun ViewfinderOpticalOverlays(
     pitchDegrees: Float,
     tapFocusPoint: Pair<Float, Float>?,
     aeAfLocked: Boolean,
-    splitLutActive: Boolean,
-    lutName: String,
-    filmGrainAmount: Float,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
-        // 1. False Color IRE Exposure Map
-        if (showFalseColor) {
-            drawFalseColorMap(telemetry.falseColorGrid, w, h)
+        // Frame-derived overlays are drawn only from real analysed frames.
+        if (telemetry.hasFrame) {
+            if (showFalseColor) {
+                drawFalseColorMap(telemetry.falseColorGrid, w, h)
+            }
+            if (zebraThreshold != ZebraThreshold.OFF) {
+                drawZebraOverlay(telemetry.zebraGrid, w, h)
+            }
+            if (peakingColor != FocusPeakingColor.OFF) {
+                drawFocusPeakingOverlay(telemetry.peakingGrid, peakingColor.color, w, h)
+            }
         }
 
-        // 2. Zebra Highlight Warning Stripes
-        if (zebraThreshold != ZebraThreshold.OFF) {
-            drawZebraOverlay(telemetry.zebraGrid, w, h)
-        }
-
-        // 3. Focus Peaking Edge Contours
-        if (peakingColor != FocusPeakingColor.OFF) {
-            drawFocusPeakingOverlay(telemetry.peakingGrid, peakingColor.color, w, h)
-        }
-
-        // 4. Split-screen LUT comparison divider
-        if (splitLutActive) {
-            val midX = w * 0.5f
-            drawLine(
-                color = NothingWhite.copy(alpha = 0.85f),
-                start = Offset(midX, 0f),
-                end = Offset(midX, h),
-                strokeWidth = 2.dp.toPx(),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
-            )
-            drawCircle(
-                color = NothingRed,
-                radius = 6.dp.toPx(),
-                center = Offset(midX, h * 0.5f)
-            )
-        }
-
-        // 5. Cinema Aspect Ratio Framing Guides & Safe Areas
+        // Cinema Aspect Ratio Framing Guides & Safe Areas
         aspectGuide.ratio?.let { targetRatio ->
             drawAspectMaskAndSafeZones(targetRatio, maskOpacity, w, h)
         }
@@ -481,7 +459,11 @@ private fun RgbHistogramCard(
     onClick: () -> Unit
 ) {
     ScopeCard(width = 120.dp, tag = "scope_rgb_histogram", onClick = onClick) {
-        ScopeHeader(title = "HIST", titleColor = NothingSilver, trailing = "${telemetry.averageIre} IRE")
+        ScopeHeader(
+            title = "HIST",
+            titleColor = NothingSilver,
+            trailing = if (telemetry.hasFrame) "${telemetry.averageIre} IRE" else "—"
+        )
         Spacer(modifier = Modifier.height(4.dp))
         Canvas(
             modifier = Modifier
@@ -524,9 +506,9 @@ private fun RgbHistogramCard(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "DR ${String.format(Locale.US, "%.1f", telemetry.dynamicRangeStops)}",
+                text = if (telemetry.hasFrame) "Δ ${String.format(Locale.US, "%.1f EV", telemetry.sceneContrastStops)}" else "НЕТ КАДРА",
                 style = MaterialTheme.typography.labelSmall,
-                color = ScopeGreen,
+                color = if (telemetry.hasFrame) ScopeGreen else NothingSilver,
                 maxLines = 1
             )
             Text(
@@ -591,7 +573,12 @@ private fun ChromaVectorscopeCard(
     onClick: () -> Unit
 ) {
     ScopeCard(width = 78.dp, tag = "scope_vectorscope", onClick = onClick) {
-        ScopeHeader(title = "VEC", titleColor = ScopeCyan, trailing = null)
+        ScopeHeader(
+            title = "VEC",
+            titleColor = ScopeCyan,
+            trailing = if (telemetry.colorTempEstimateK > 0) "${telemetry.colorTempEstimateK / 100}" else null,
+            trailingColor = NothingSilver
+        )
         Spacer(modifier = Modifier.height(4.dp))
         Canvas(
             modifier = Modifier

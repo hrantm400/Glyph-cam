@@ -6,7 +6,7 @@
     <string name="mode_lut_color">LUT и цвет</string>
     <string name="mode_media_vault">Архив</string>
     <string name="permission_camera_title">Нужен доступ к камере</string>
-    <string name="permission_camera_desc">Сейчас видоискатель работает в режиме симуляции. Разрешите камеру и микрофон, чтобы видеть живую картинку и записывать видео со звуком.</string>
+    <string name="permission_camera_desc">Без разрешения камера не запустится. Разрешите камеру и микрофон, чтобы видеть живую картинку, снимать фото и писать видео со звуком.</string>
     <string name="grant_permissions_btn">РАЗРЕШИТЬ</string>
     <string name="shutter_capture">Снять кадр</string>
     <string name="record_toggle">Запись видео</string>

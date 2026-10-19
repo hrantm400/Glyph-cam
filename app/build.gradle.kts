@@ -107,6 +107,8 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  // Nothing Glyph Matrix SDK (local AAR); only used on Nothing phones at runtime.
+  implementation(files("libs/glyph-matrix-sdk-2.0.aar"))
   // implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:

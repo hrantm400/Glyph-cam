@@ -26,6 +26,10 @@ class ScreenshotTest {
 
     @Test
     fun captureAllModes() {
+        org.robolectric.Shadows.shadowOf(rule.activity.application).grantPermissions(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO
+        )
         val vm = ProCameraViewModel(rule.activity.application)
         rule.setContent {
             MyApplicationTheme { GlyphCamStudioScreen(viewModel = vm, modifier = Modifier.fillMaxSize()) }

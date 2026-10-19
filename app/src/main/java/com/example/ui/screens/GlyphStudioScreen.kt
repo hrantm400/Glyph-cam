@@ -52,6 +52,8 @@ import com.example.ui.theme.NothingSilver
 import com.example.ui.theme.NothingSurface
 import com.example.ui.theme.NothingSurfaceHigh
 import com.example.ui.theme.NothingWhite
+import com.example.ui.theme.ScopeAmber
+import com.example.ui.theme.ScopeGreen
 import com.example.viewmodel.ProCameraUiState
 
 @Composable
@@ -61,6 +63,7 @@ fun GlyphStudioScreen(
     onToggleSegment: (Int) -> Unit,
     onBrightnessChange: (Int) -> Unit,
     onToggleTorchHardware: () -> Unit,
+    onReconnect: () -> Unit,
     onBackToCamera: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -74,11 +77,18 @@ fun GlyphStudioScreen(
     ) {
         StudioHeader(
             title = "Glyph-студия",
-            subtitle = "NOTHING PHONE (2) · 11 СЕГМЕНТОВ · 33 ЗОНЫ",
+            subtitle = when {
+                !state.glyphSupported -> "GLYPH INTERFACE · НЕДОСТУПНО"
+                state.glyphConnected -> state.glyphDeviceName.uppercase() + " · ПОДКЛЮЧЕНО"
+                else -> state.glyphDeviceName.uppercase() + " · НЕТ СВЯЗИ"
+            },
             onBack = onBackToCamera,
             backTag = "glyph_back_btn"
         ) {
-            CodeBadge(text = "${state.glyphBrightness}%", color = NothingRed)
+            CodeBadge(
+                text = if (state.glyphConnected) "${state.glyphBrightness}%" else "OFF",
+                color = if (state.glyphConnected) NothingRed else NothingSilver
+            )
         }
 
         Column(
@@ -88,6 +98,9 @@ fun GlyphStudioScreen(
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp)
         ) {
+            GlyphStatusCard(state = state, onReconnect = onReconnect)
+            Spacer(modifier = Modifier.height(12.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -125,7 +138,7 @@ fun GlyphStudioScreen(
                                 .testTag("slider_glyph_brightness")
                         )
                         Text(
-                            text = "${3300 + state.glyphBrightness * 12}K · мягкий свет",
+                            text = "уровень ${state.glyphBrightness * 40} / 4000",
                             style = MaterialTheme.typography.labelSmall,
                             color = NothingSilver
                         )
@@ -142,12 +155,12 @@ fun GlyphStudioScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "LED-вспышка",
+                                    text = "LED-фонарик",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = NothingWhite
                                 )
                                 Text(
-                                    text = "Включать вместе с Glyph",
+                                    text = if (state.capabilities.hasFlash) "Постоянный свет вспышки камеры" else "У этой камеры нет вспышки",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = NothingSilver
                                 )
@@ -172,6 +185,14 @@ fun GlyphStudioScreen(
                             trailing = "${state.activeGlyphSegments.size}/11",
                             trailingColor = NothingWhite
                         )
+                        if (!state.glyphSupported) {
+                            Text(
+                                text = "Схема повторяет заднюю панель Nothing Phone (2); на этом устройстве она ничего не включает.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NothingSilver,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         val zoneLabels = listOf(
                             0 to "LENS L", 1 to "LENS R", 2 to "SLASH",
@@ -268,6 +289,69 @@ fun GlyphStudioScreen(
                             StatusDot(color = NothingRed, size = 10.dp)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlyphStatusCard(state: ProCameraUiState, onReconnect: () -> Unit) {
+    val accent = when {
+        !state.glyphSupported -> NothingSilver
+        state.glyphConnected -> ScopeGreen
+        else -> ScopeAmber
+    }
+    NothingCard(
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+        accent = accent,
+        selected = state.glyphConnected,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("glyph_status_card")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusDot(color = accent, size = 10.dp)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = when {
+                        !state.glyphSupported -> "Glyph Interface недоступен"
+                        state.glyphConnected -> "Glyph Interface подключён"
+                        else -> "Glyph Interface не отвечает"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = NothingWhite
+                )
+                Text(
+                    text = state.glyphMessage.ifEmpty { state.glyphDeviceName },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingSilver
+                )
+                if (state.glyphSupported && !state.glyphConnected) {
+                    Text(
+                        text = "На Nothing OS до Android 16 включите отладку Glyph: adb shell settings put global nt_glyph_interface_debug_enable 1",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NothingSilver,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+            if (state.glyphSupported && !state.glyphConnected) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(NothingSurface)
+                        .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
+                        .clickable { onReconnect() }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("btn_glyph_reconnect")
+                ) {
+                    Text(text = "ЕЩЁ РАЗ", style = MaterialTheme.typography.labelLarge, color = NothingWhite)
                 }
             }
         }

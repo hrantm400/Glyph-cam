@@ -1,31 +1,42 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.net.Uri
+import android.os.SystemClock
+import androidx.camera.view.PreviewView
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import com.example.camera.ProCameraController
 import com.example.data.CameraPresetEntity
 import com.example.data.CameraRepository
 import com.example.data.CapturedShotEntity
 import com.example.data.GlyphCamDatabase
+import com.example.glyph.GlyphBridge
 import com.example.model.AnamorphicDeSqueeze
 import com.example.model.AppMode
-import com.example.model.AudioDirectionMode
+import com.example.model.AwbPreset
+import com.example.model.CameraCapabilities
+import com.example.model.CameraStatus
+import com.example.model.FlashMode
 import com.example.model.FocusPeakingColor
 import com.example.model.FocusPullPoint
 import com.example.model.FrameAspectGuide
 import com.example.model.GlyphLightingMode
 import com.example.model.GridOverlayMode
+import com.example.model.LensOption
+import com.example.model.LiveExposureInfo
 import com.example.model.LiveScopeTelemetry
 import com.example.model.LutProfile
-import com.example.model.MeteringMode
-import com.example.model.NothingLens
 import com.example.model.PhotoDriveMode
 import com.example.model.PhotoFormat
-import com.example.model.StabilizationMode
-import com.example.model.VideoCodecProfile
+import com.example.model.SavedCapture
+import com.example.model.SelfTimer
+import com.example.model.VideoDynamicRange
 import com.example.model.VideoFps
 import com.example.model.VideoResolution
 import com.example.model.ZebraThreshold
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,68 +46,86 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
-enum class ManualDialTab(val labelRu: String, val shortCode: String) {
-    ISO("ЧУВСТВИТ. ISO", "ISO"),
-    SHUTTER("ВЫДЕРЖКА / УГОЛ", "SHTR"),
-    FOCUS("ФОКУС + ПУЛЛЕР", "MF"),
-    WB("БАЛАНС БЕЛОГО", "WB"),
-    EV("ЭКСПОКОРРЕКЦИЯ", "EV"),
-    AUDIO("МИКРОФОН 24-BIT", "AUD")
+enum class ManualDialTab(val labelRu: String) {
+    ISO("ISO"),
+    SHUTTER("Выдержка"),
+    FOCUS("Фокус"),
+    WB("Баланс белого"),
+    EV("Экспокоррекция"),
+    AUDIO("Звук")
 }
 
+val AppMode.isCameraMode: Boolean
+    get() = this == AppMode.PHOTO_PRO || this == AppMode.CINE_VIDEO
+
+/** Everything the bind depends on; a change here re-binds the CameraX use cases. */
+data class CameraBindKey(
+    val mode: AppMode,
+    val useFront: Boolean,
+    val photoFormat: PhotoFormat,
+    val videoResolution: VideoResolution,
+    val videoFps: VideoFps,
+    val dynamicRange: VideoDynamicRange,
+    val stabilization: Boolean
+)
+
 data class ProCameraUiState(
-    val activeMode: AppMode = AppMode.CINE_VIDEO,
-    val selectedLens: NothingLens = NothingLens.MAIN_WIDE,
-    val fineZoomRatio: Float = 1.0f,
+    val activeMode: AppMode = AppMode.PHOTO_PRO,
+    val lastCameraMode: AppMode = AppMode.PHOTO_PRO,
+    val cameraStatus: CameraStatus = CameraStatus.NoPermission,
+    val capabilities: CameraCapabilities = CameraCapabilities(),
+    val useFrontCamera: Boolean = false,
+    val zoomRatio: Float = 1.0f,
     val selectedDialTab: ManualDialTab? = null,
 
-    // Manual Exposure & Focus
+    // Exposure & focus
     val isoValue: Int = 0, // 0 = AUTO
-    val shutterDenominator: Int = 48, // 0 = AUTO, 48 = 1/48s
-    val shutterAngleDeg: Float = 180.0f,
+    val shutterNs: Long = 0L, // 0 = AUTO
+    val shutterAngleDeg: Float = 180f,
     val useShutterAngleInVideo: Boolean = true,
-    val wbKelvin: Int = 5600, // 0 = AWB
-    val wbTint: Int = 0, // -50..+50
-    val evCompensation: Float = 0.0f, // -3.0..+3.0
-    val manualFocusDiopters: Float? = null, // null = AF-C, 0f = inf, 10f = macro
+    val awbPreset: AwbPreset = AwbPreset.AUTO,
+    val evCompensation: Float = 0.0f,
+    val manualFocusDiopters: Float? = null, // null = AF
     val focusPullPoints: List<FocusPullPoint> = listOf(
-        FocusPullPoint("A", 8.0f, "0.12m MACRO"),
-        FocusPullPoint("B", 2.2f, "0.45m SUBJ"),
-        FocusPullPoint("C", 0.1f, "∞ HORIZON")
+        FocusPullPoint("A", 5.0f, "0.20 м"),
+        FocusPullPoint("B", 1.0f, "1.00 м"),
+        FocusPullPoint("C", 0.0f, "∞")
     ),
     val activeFocusPullSlot: String? = null,
     val focusPullDurationMs: Long = 1400L,
     val aeAfLocked: Boolean = false,
     val tapFocusNormalized: Pair<Float, Float>? = null,
-    val meteringMode: MeteringMode = MeteringMode.MATRIX,
-    val stabilizationMode: StabilizationMode = StabilizationMode.HYBRID_OIS_EIS,
+    val liveExposure: LiveExposureInfo = LiveExposureInfo(),
 
-    // Photo Pro Configuration
-    val photoFormat: PhotoFormat = PhotoFormat.RAW_PLUS_JPEG,
+    // Photo
+    val photoFormat: PhotoFormat = PhotoFormat.JPEG,
     val photoDriveMode: PhotoDriveMode = PhotoDriveMode.SINGLE,
-    val ndFilterStops: Int = 0, // 0, 3 (ND8), 6 (ND64), 10 (ND1000)
+    val selfTimer: SelfTimer = SelfTimer.OFF,
+    val flashMode: FlashMode = FlashMode.OFF,
+    val timerCountdown: Int = 0,
+    val isCapturing: Boolean = false,
 
-    // Cinema Video Configuration
-    val videoResolution: VideoResolution = VideoResolution.DCI_4K,
-    val videoFps: VideoFps = VideoFps.FPS_24,
-    val videoCodec: VideoCodecProfile = VideoCodecProfile.HEVC_ALL_I,
+    // Video
+    val videoResolution: VideoResolution = VideoResolution.UHD_4K,
+    val videoFps: VideoFps = VideoFps.FPS_30,
+    val videoDynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,
+    val stabilization: Boolean = false,
     val anamorphicDeSqueeze: AnamorphicDeSqueeze = AnamorphicDeSqueeze.NONE,
     val aspectGuide: FrameAspectGuide = FrameAspectGuide.OFF,
     val aspectMaskOpacity: Float = 0.65f,
 
-    // Audio Studio
-    val audioGainDb: Float = 0.0f,
-    val windCutEnabled: Boolean = true,
-    val audioDirection: AudioDirectionMode = AudioDirectionMode.STEREO_WIDE,
-    val leftAudioDb: Float = -28f,
-    val rightAudioDb: Float = -27f,
-    val peakAudioDb: Float = -18f,
+    // Audio
+    val audioEnabled: Boolean = true,
+    val audioAvailable: Boolean = false,
+    val leftAudioDb: Float = -60f,
+    val rightAudioDb: Float = -60f,
+    val peakAudioDb: Float = -60f,
 
-    // Scopes & Overlays
+    // Scopes & overlays
     val showHistogramRgb: Boolean = false,
     val showWaveformScope: Boolean = false,
     val showVectorscope: Boolean = false,
@@ -105,69 +134,108 @@ data class ProCameraUiState(
     val focusPeakingColor: FocusPeakingColor = FocusPeakingColor.OFF,
     val gridOverlayMode: GridOverlayMode = GridOverlayMode.RULE_OF_THIRDS,
     val showHorizonLevel: Boolean = true,
-    val showCenterCrosshair: Boolean = true,
 
-    // Nothing Phone (2) Glyph Interface Studio
-    val glyphMode: GlyphLightingMode = GlyphLightingMode.PORTRAIT_CATCHLIGHT,
-    val activeGlyphSegments: Set<Int> = setOf(0, 1, 2, 5, 6), // 0..10 (11 physical strips on Phone 2)
-    val glyphBrightness: Int = 75,
+    // Glyph
+    val glyphMode: GlyphLightingMode = GlyphLightingMode.OFF,
+    val activeGlyphSegments: Set<Int> = emptySet(),
+    val glyphBrightness: Int = 70,
     val glyphTorchHardwareSync: Boolean = false,
-    val glyphAudioReactive: Boolean = true,
+    val glyphSupported: Boolean = false,
+    val glyphConnected: Boolean = false,
+    val glyphDeviceName: String = "",
+    val glyphMessage: String = "",
 
-    // 3D LUT & Color Grading
-    val activeLut: LutProfile = LutProfile.KODAK_2383_TEAL,
+    // LUT & grading
+    val activeLut: LutProfile = LutProfile.NOTHING_STD,
     val userContrast: Float = 1.0f,
     val userSaturation: Float = 1.0f,
     val shadowLift: Float = 0.0f,
     val highlightRollOff: Float = 0.15f,
-    val filmGrainAmount: Float = 0.18f,
-    val splitScreenLutCompare: Boolean = false,
+    val bakeLutIntoPhotos: Boolean = true,
 
-    // Live Telemetry & Recording State
+    // Live telemetry & recording
     val scopeTelemetry: LiveScopeTelemetry = LiveScopeTelemetry(),
     val rollDegrees: Float = 0.0f,
     val pitchDegrees: Float = 0.0f,
     val isRecording: Boolean = false,
-    val recordingElapsedSec: Int = 0,
+    val recordingElapsedMs: Long = 0L,
     val shutterFlashTrigger: Long = 0L,
-    val statusBanner: String = "SONY IMX890 // ГОТОВ К СЪЁМКЕ",
+    val statusBanner: String = "",
     val inspectShot: CapturedShotEntity? = null
 ) {
+    val isVideoMode: Boolean get() = activeMode == AppMode.CINE_VIDEO
+    val cameraMode: AppMode get() = if (activeMode.isCameraMode) activeMode else lastCameraMode
+    val isManualExposure: Boolean get() = isoValue > 0 || shutterNs > 0L
+
+    val bindKey: CameraBindKey
+        get() = CameraBindKey(cameraMode, useFrontCamera, photoFormat, videoResolution, videoFps, videoDynamicRange, stabilization)
+
     val formattedTimecode: String
         get() {
-            val hrs = recordingElapsedSec / 3600
-            val mins = (recordingElapsedSec % 3600) / 60
-            val secs = recordingElapsedSec % 60
-            val frames = ((System.currentTimeMillis() / 42) % videoFps.fps).toInt()
+            val totalSec = recordingElapsedMs / 1000L
+            val hrs = totalSec / 3600
+            val mins = (totalSec % 3600) / 60
+            val secs = totalSec % 60
+            val frames = ((recordingElapsedMs % 1000L) * videoFps.fps / 1000L).toInt()
             return String.format(Locale.US, "%02d:%02d:%02d:%02d", hrs, mins, secs, frames)
         }
 
     val shutterDisplayLabel: String
         get() {
-            if (activeMode == AppMode.CINE_VIDEO && useShutterAngleInVideo) {
-                return String.format(Locale.US, "%.1f°", shutterAngleDeg)
-            }
-            return if (shutterDenominator <= 0) "AUTO"
-            else if (shutterDenominator == 1) "1.0\""
-            else "1/$shutterDenominator"
+            if (shutterNs <= 0L) return "AUTO"
+            if (isVideoMode && useShutterAngleInVideo) return String.format(Locale.US, "%.0f°", shutterAngleDeg)
+            return formatExposure(shutterNs)
         }
 
+    /** What the sensor is doing right now, even in auto mode. */
+    val liveShutterLabel: String
+        get() = if (liveExposure.exposureNs > 0L) formatExposure(liveExposure.exposureNs) else "—"
+
+    val liveIsoLabel: String
+        get() = if (liveExposure.iso > 0) liveExposure.iso.toString() else "—"
+
     val isoDisplayLabel: String
-        get() = if (isoValue <= 0) "AUTO" else "ISO $isoValue"
+        get() = if (isoValue <= 0) "AUTO" else isoValue.toString()
 
     val wbDisplayLabel: String
-        get() = if (wbKelvin <= 0) "AWB" else "${wbKelvin}K"
+        get() = awbPreset.code
 
     val focusDisplayLabel: String
         get() {
-            val d = manualFocusDiopters ?: return "AF-C"
-            if (d <= 0.15f) return "∞ INF"
-            val meters = (1.0f / d).coerceIn(0.04f, 10.0f)
-            return String.format(Locale.US, "%.2fm", meters)
+            val d = manualFocusDiopters ?: return "AF"
+            return formatDiopters(d)
         }
+
+    val zoomLabel: String
+        get() = if (zoomRatio < 0.95f || zoomRatio - zoomRatio.toInt() > 0.05f) {
+            String.format(Locale.US, "%.1f×", zoomRatio)
+        } else {
+            "${zoomRatio.roundToInt()}×"
+        }
+
+    val selectedLensId: String?
+        get() = capabilities.lensOptions.minByOrNull { kotlin.math.abs(it.zoomRatio - zoomRatio) }
+            ?.takeIf { kotlin.math.abs(it.zoomRatio - zoomRatio) < 0.08f }?.id
+
+    val lutColorMatrix: FloatArray?
+        get() = if (activeLut.isIdentity && userContrast == 1f && userSaturation == 1f && shadowLift == 0f) null
+        else activeLut.buildColorMatrix(userContrast, userSaturation, shadowLift, highlightRollOff).values
 }
 
-class ProCameraViewModel(application: Application) : AndroidViewModel(application) {
+fun formatExposure(ns: Long): String {
+    if (ns <= 0L) return "—"
+    if (ns >= 1_000_000_000L) return String.format(Locale.US, "%.1f\"", ns / 1_000_000_000.0)
+    val denom = (1_000_000_000.0 / ns).roundToInt().coerceAtLeast(1)
+    return "1/$denom"
+}
+
+fun formatDiopters(d: Float): String {
+    if (d <= 0.05f) return "∞"
+    val meters = 1f / d
+    return if (meters >= 10f) "∞" else String.format(Locale.US, "%.2f м", meters)
+}
+
+class ProCameraViewModel(application: Application) : AndroidViewModel(application), ProCameraController.Listener {
 
     private val repository: CameraRepository
     private val _uiState = MutableStateFlow(ProCameraUiState())
@@ -176,132 +244,445 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     val presets: StateFlow<List<CameraPresetEntity>>
     val capturedShots: StateFlow<List<CapturedShotEntity>>
 
+    val controller = ProCameraController(application, viewModelScope, this)
+    private val glyph = GlyphBridge(application) { st ->
+        _uiState.update {
+            it.copy(
+                glyphSupported = st.supported,
+                glyphConnected = st.connected,
+                glyphDeviceName = st.deviceName,
+                glyphMessage = st.message
+            )
+        }
+    }
+
     private var focusPullJob: Job? = null
+    private var lastGlyphProgressMs = 0L
 
     init {
         val db = GlyphCamDatabase.getInstance(application)
         repository = CameraRepository(db.cameraDao())
-        presets = repository.presets.stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5000),
-            emptyList()
-        )
-        capturedShots = repository.capturedShots.stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5000),
-            emptyList()
-        )
+        presets = repository.presets.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        capturedShots = repository.capturedShots.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         viewModelScope.launch {
             repository.seedFactoryPresetsIfNeeded()
+            purgeMissingShots()
+        }
+        glyph.connect()
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Camera lifecycle
+    // ------------------------------------------------------------------------------------------
+
+    fun bindCamera(owner: LifecycleOwner, previewView: PreviewView) {
+        val s = _uiState.value
+        controller.bind(
+            owner,
+            previewView,
+            ProCameraController.BindRequest(
+                mode = s.cameraMode,
+                useFront = s.useFrontCamera,
+                photoFormat = s.photoFormat,
+                videoResolution = s.videoResolution,
+                fps = s.videoFps,
+                dynamicRange = s.videoDynamicRange,
+                stabilization = s.stabilization
+            )
+        )
+    }
+
+    fun onPermissionsChanged(camera: Boolean) {
+        if (!camera) _uiState.update { it.copy(cameraStatus = CameraStatus.NoPermission) }
+    }
+
+    fun onForeground() {
+        controller.startSensors()
+        refreshAudioMeter()
+    }
+
+    fun onBackground() {
+        controller.stopSensors()
+        controller.setAudioMeterEnabled(false)
+    }
+
+    private fun refreshAudioMeter() {
+        val s = _uiState.value
+        controller.setAudioMeterEnabled(s.cameraMode == AppMode.CINE_VIDEO && s.audioEnabled && s.activeMode.isCameraMode)
+    }
+
+    private fun pushParams() {
+        val s = _uiState.value
+        controller.applyParams(
+            ProCameraController.ManualParams(
+                iso = s.isoValue,
+                shutterNs = s.shutterNs,
+                awb = s.awbPreset,
+                evCompensation = s.evCompensation,
+                focusDiopters = s.manualFocusDiopters,
+                torch = s.glyphTorchHardwareSync,
+                flash = s.flashMode,
+                zebraIre = s.zebraThreshold.irePercent,
+                isVideo = s.cameraMode == AppMode.CINE_VIDEO
+            )
+        )
+    }
+
+    private fun pushGlyph() {
+        val s = _uiState.value
+        if (s.glyphMode == GlyphLightingMode.OFF) {
+            glyph.off()
+            return
+        }
+        val segments = if (s.glyphMode == GlyphLightingMode.TALLY_AND_AUDIO_VU && !s.isRecording) {
+            s.activeGlyphSegments - 10
+        } else s.activeGlyphSegments
+        glyph.apply(segments, s.glyphBrightness)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Controller callbacks
+    // ------------------------------------------------------------------------------------------
+
+    override fun onStatus(status: CameraStatus) {
+        _uiState.update {
+            it.copy(
+                cameraStatus = status,
+                statusBanner = when (status) {
+                    is CameraStatus.Ready -> status.detail
+                    is CameraStatus.Error -> status.message
+                    else -> it.statusBanner
+                }
+            )
+        }
+        if (status is CameraStatus.Ready) {
+            pushParams()
+            refreshAudioMeter()
         }
     }
 
-    fun setAppMode(mode: AppMode) {
-        _uiState.update { it.copy(activeMode = mode) }
-    }
-
-    fun selectLens(lens: NothingLens) {
-        _uiState.update {
-            it.copy(
-                selectedLens = lens,
-                fineZoomRatio = lens.zoomRatio,
-                statusBanner = "${lens.focalLabel} // ${lens.sensorName}"
+    override fun onCapabilities(capabilities: CameraCapabilities) {
+        _uiState.update { s ->
+            s.copy(
+                capabilities = capabilities,
+                photoFormat = if (capabilities.photoFormats.contains(s.photoFormat)) s.photoFormat else PhotoFormat.JPEG,
+                videoResolution = if (capabilities.videoResolutions.contains(s.videoResolution)) s.videoResolution
+                else capabilities.videoResolutions.first(),
+                videoFps = if (capabilities.videoFps.contains(s.videoFps)) s.videoFps else capabilities.videoFps.first(),
+                videoDynamicRange = if (capabilities.hdrVideo) s.videoDynamicRange else VideoDynamicRange.SDR,
+                flashMode = if (capabilities.hasFlash) s.flashMode else FlashMode.OFF,
+                evCompensation = if (capabilities.evRange > 0f) s.evCompensation.coerceIn(-capabilities.evRange, capabilities.evRange) else 0f
             )
         }
     }
 
-    fun setFineZoom(zoom: Float) {
-        _uiState.update { it.copy(fineZoomRatio = zoom.coerceIn(0.6f, 8.0f)) }
+    override fun onZoomChanged(ratio: Float, minRatio: Float, maxRatio: Float) {
+        _uiState.update { it.copy(zoomRatio = ratio) }
     }
 
-    fun toggleDialTab(tab: ManualDialTab) {
-        _uiState.update {
-            it.copy(selectedDialTab = if (it.selectedDialTab == tab) null else tab)
+    override fun onTelemetry(telemetry: LiveScopeTelemetry) {
+        _uiState.update { it.copy(scopeTelemetry = telemetry) }
+    }
+
+    override fun onLiveExposure(info: LiveExposureInfo) {
+        _uiState.update { it.copy(liveExposure = info) }
+    }
+
+    override fun onHorizon(rollDeg: Float, pitchDeg: Float) {
+        _uiState.update { it.copy(rollDegrees = rollDeg, pitchDegrees = pitchDeg) }
+    }
+
+    override fun onAudioLevels(leftDb: Float, rightDb: Float, peakDb: Float, available: Boolean) {
+        _uiState.update { it.copy(leftAudioDb = leftDb, rightAudioDb = rightDb, peakAudioDb = peakDb, audioAvailable = available) }
+        val s = _uiState.value
+        if (s.glyphConnected && s.glyphMode == GlyphLightingMode.TALLY_AND_AUDIO_VU && s.isRecording) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastGlyphProgressMs > 160) {
+                lastGlyphProgressMs = now
+                glyph.showProgress(((peakDb + 60f) / 60f * 100f).roundToInt())
+            }
         }
+    }
+
+    override fun onRecordingChanged(isRecording: Boolean, elapsedMs: Long) {
+        val wasRecording = _uiState.value.isRecording
+        _uiState.update { it.copy(isRecording = isRecording, recordingElapsedMs = elapsedMs) }
+        if (wasRecording != isRecording) {
+            if (isRecording) {
+                _uiState.update { it.copy(statusBanner = "Идёт запись") }
+            }
+            pushGlyph()
+        }
+    }
+
+    override fun onCaptureSaved(capture: SavedCapture) {
+        val s = _uiState.value
+        val caps = s.capabilities
+        val focalEquiv = caps.focalEquivMm.takeIf { it > 0 }?.let { (it * s.zoomRatio).roundToInt() }
+        val focalLabel = buildString {
+            capture.focalLengthMm?.let { append(String.format(Locale.US, "%.1f мм", it)) }
+            if (focalEquiv != null) {
+                if (isNotEmpty()) append(" · ")
+                append("≈$focalEquiv мм экв.")
+            }
+        }
+        val shutterLabel = when {
+            capture.exposureTimeSec != null -> formatExposure((capture.exposureTimeSec * 1_000_000_000.0).toLong())
+            capture.isVideo && s.shutterNs > 0L -> s.shutterDisplayLabel
+            s.liveExposure.exposureNs > 0L -> s.liveShutterLabel
+            else -> "—"
+        }
+        val entity = CapturedShotEntity(
+            uri = capture.uri,
+            isVideo = capture.isVideo,
+            displayName = capture.displayName,
+            mimeType = capture.mimeType,
+            width = capture.width,
+            height = capture.height,
+            sizeBytes = capture.sizeBytes,
+            durationMs = capture.durationMs,
+            isoUsed = capture.iso ?: s.liveExposure.iso.takeIf { it > 0 } ?: s.isoValue,
+            shutterLabel = shutterLabel,
+            apertureLabel = capture.fNumber?.let { String.format(Locale.US, "f/%.1f", it) } ?: caps.apertureLabel,
+            focalLabel = focalLabel,
+            zoomRatio = s.zoomRatio,
+            wbLabel = s.awbPreset.code,
+            evValue = s.evCompensation,
+            lutApplied = s.activeLut.code,
+            lutBaked = capture.lutBaked,
+            glyphModeUsed = s.glyphMode.code,
+            cameraLabel = caps.cameraLabel,
+            histogramSummary = capture.histogram16.joinToString(",")
+        )
+        viewModelScope.launch {
+            repository.logCapturedShot(entity)
+            _uiState.update {
+                it.copy(
+                    statusBanner = if (capture.isVideo) {
+                        "Видео сохранено · ${capture.displayName}"
+                    } else {
+                        "Снимок сохранён · ${capture.displayName}" + if (capture.lutBaked) " · LUT ${s.activeLut.code}" else ""
+                    }
+                )
+            }
+        }
+    }
+
+    override fun onShutterFired() {
+        _uiState.update { it.copy(shutterFlashTrigger = System.currentTimeMillis()) }
+    }
+
+    override fun onTimerTick(secondsLeft: Int) {
+        _uiState.update { it.copy(timerCountdown = secondsLeft) }
+    }
+
+    override fun onBusy(busy: Boolean) {
+        _uiState.update { it.copy(isCapturing = busy) }
+    }
+
+    override fun onMessage(text: String) {
+        _uiState.update { it.copy(statusBanner = text) }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Navigation & capture
+    // ------------------------------------------------------------------------------------------
+
+    fun setAppMode(mode: AppMode) {
+        _uiState.update {
+            it.copy(
+                activeMode = mode,
+                lastCameraMode = if (mode.isCameraMode) mode else it.lastCameraMode,
+                selectedDialTab = if (mode.isCameraMode) it.selectedDialTab else null
+            )
+        }
+        refreshAudioMeter()
+    }
+
+    fun triggerShutter() {
+        val s = _uiState.value
+        if (s.cameraStatus !is CameraStatus.Ready) {
+            _uiState.update { it.copy(statusBanner = "Камера ещё не запущена") }
+            return
+        }
+        if (s.isVideoMode) {
+            controller.toggleRecording(s.audioEnabled)
+        } else {
+            val started = controller.capturePhoto(
+                ProCameraController.PhotoRequest(
+                    drive = s.photoDriveMode,
+                    timerSeconds = s.selfTimer.seconds,
+                    lutMatrix = if (s.bakeLutIntoPhotos) s.lutColorMatrix else null,
+                    lutCode = s.activeLut.code
+                )
+            )
+            if (!started) _uiState.update { it.copy(statusBanner = "Таймер отменён", timerCountdown = 0) }
+        }
+    }
+
+    fun toggleFrontCamera() {
+        _uiState.update {
+            it.copy(
+                useFrontCamera = !it.useFrontCamera,
+                manualFocusDiopters = null,
+                tapFocusNormalized = null,
+                aeAfLocked = false
+            )
+        }
+    }
+
+    fun selectLens(option: LensOption) {
+        if (option.isFront != _uiState.value.useFrontCamera) {
+            toggleFrontCamera()
+            return
+        }
+        controller.setZoomRatio(option.zoomRatio)
+        _uiState.update {
+            it.copy(
+                zoomRatio = option.zoomRatio,
+                statusBanner = option.focalEquivMm?.let { mm -> "${option.label} · ≈$mm мм" } ?: option.label
+            )
+        }
+    }
+
+    fun pinchZoom(scaleFactor: Float) {
+        val current = controller.currentZoom().takeIf { it > 0f } ?: _uiState.value.zoomRatio
+        controller.setZoomRatio(current * scaleFactor)
+    }
+
+    fun setZoom(ratio: Float) {
+        controller.setZoomRatio(ratio)
+    }
+
+    fun onViewfinderTap(normX: Float, normY: Float, previewView: PreviewView, pxX: Float, pxY: Float, longPress: Boolean) {
+        val s = _uiState.value
+        if (longPress && s.aeAfLocked) {
+            controller.cancelFocusLock()
+            _uiState.update { it.copy(aeAfLocked = false, tapFocusNormalized = null, statusBanner = "Блокировка AE/AF снята") }
+            return
+        }
+        controller.tapToFocus(previewView, pxX, pxY, longPress)
+        _uiState.update {
+            it.copy(
+                tapFocusNormalized = Pair(normX, normY),
+                aeAfLocked = longPress,
+                statusBanner = if (longPress) "AE/AF заблокированы" else "Фокус и экспозиция по точке"
+            )
+        }
+        if (!longPress) {
+            viewModelScope.launch {
+                delay(4000)
+                _uiState.update { st -> if (!st.aeAfLocked) st.copy(tapFocusNormalized = null) else st }
+            }
+        }
+    }
+
+    fun toggleAeAfLock(previewView: PreviewView?) {
+        val s = _uiState.value
+        if (s.aeAfLocked) {
+            controller.cancelFocusLock()
+            _uiState.update { it.copy(aeAfLocked = false, tapFocusNormalized = null, statusBanner = "Блокировка AE/AF снята") }
+        } else if (previewView != null) {
+            controller.tapToFocus(previewView, previewView.width / 2f, previewView.height / 2f, true)
+            _uiState.update { it.copy(aeAfLocked = true, tapFocusNormalized = Pair(0.5f, 0.5f), statusBanner = "AE/AF заблокированы по центру") }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Manual exposure & focus
+    // ------------------------------------------------------------------------------------------
+
+    fun toggleDialTab(tab: ManualDialTab) {
+        _uiState.update { it.copy(selectedDialTab = if (it.selectedDialTab == tab) null else tab) }
     }
 
     fun setIso(iso: Int) {
         _uiState.update { it.copy(isoValue = iso) }
+        pushParams()
     }
 
-    fun setShutterDenominator(denom: Int) {
+    fun setShutterDenominator(denom: Int) = setShutterNs(if (denom > 0) 1_000_000_000L / denom else 0L)
+
+    /** Exposure time in nanoseconds, 0 = automatic. Keeps the shutter angle in sync for video. */
+    fun setShutterNs(ns: Long) {
         _uiState.update { state ->
-            val angle = if (denom > 0) {
-                ((state.videoFps.fps * 360f) / denom).coerceIn(11.2f, 360f)
+            val angle = if (ns > 0L) {
+                ((ns * 360.0 * state.videoFps.fps) / 1_000_000_000.0).toFloat().coerceIn(1f, 360f)
             } else 180f
-            state.copy(shutterDenominator = denom, shutterAngleDeg = angle)
+            state.copy(shutterNs = ns, shutterAngleDeg = angle, useShutterAngleInVideo = false)
         }
+        pushParams()
     }
 
     fun setShutterAngle(angleDeg: Float) {
         _uiState.update { state ->
-            val denom = ((state.videoFps.fps * 360f) / angleDeg).roundToInt().coerceAtLeast(1)
-            state.copy(
-                shutterAngleDeg = angleDeg,
-                shutterDenominator = denom,
-                useShutterAngleInVideo = true
-            )
+            val ns = (1_000_000_000.0 * angleDeg / (360.0 * state.videoFps.fps)).toLong().coerceAtLeast(1L)
+            state.copy(shutterAngleDeg = angleDeg, shutterNs = ns, useShutterAngleInVideo = true)
         }
+        pushParams()
+    }
+
+    fun setShutterAuto() {
+        _uiState.update { it.copy(shutterNs = 0L) }
+        pushParams()
     }
 
     fun toggleShutterAngleMode() {
         _uiState.update { it.copy(useShutterAngleInVideo = !it.useShutterAngleInVideo) }
     }
 
-    fun setWhiteBalance(kelvin: Int, tint: Int = _uiState.value.wbTint) {
-        _uiState.update { it.copy(wbKelvin = kelvin, wbTint = tint.coerceIn(-50, 50)) }
+    fun setWhiteBalance(preset: AwbPreset) {
+        _uiState.update { it.copy(awbPreset = preset, statusBanner = "Баланс белого: ${preset.labelRu}") }
+        pushParams()
     }
 
     fun setEvCompensation(ev: Float) {
-        _uiState.update { it.copy(evCompensation = ((ev * 10f).roundToInt() / 10f).coerceIn(-3.0f, 3.0f)) }
+        val caps = _uiState.value.capabilities
+        val range = caps.evRange.takeIf { it > 0f } ?: 3f
+        val snapped = if (caps.evStep > 0f) (ev / caps.evStep).roundToInt() * caps.evStep else (ev * 10f).roundToInt() / 10f
+        _uiState.update { it.copy(evCompensation = snapped.coerceIn(-range, range)) }
+        pushParams()
     }
 
     fun setManualFocus(diopters: Float?) {
         focusPullJob?.cancel()
         _uiState.update {
             it.copy(
-                manualFocusDiopters = diopters,
-                activeFocusPullSlot = null
+                manualFocusDiopters = diopters?.coerceIn(0f, it.capabilities.minFocusDiopters.takeIf { m -> m > 0f } ?: 10f),
+                activeFocusPullSlot = null,
+                aeAfLocked = false,
+                tapFocusNormalized = null
             )
         }
+        pushParams()
     }
 
     fun saveFocusPullPoint(slot: String) {
-        val currentDiopters = _uiState.value.manualFocusDiopters ?: 2.0f
-        val metersLabel = if (currentDiopters <= 0.15f) "∞ INF" else String.format(Locale.US, "%.2fm", 1f / currentDiopters)
+        val current = _uiState.value.manualFocusDiopters ?: _uiState.value.liveExposure.focusDistanceDiopters
+        val label = formatDiopters(current)
         _uiState.update { state ->
-            val updated = state.focusPullPoints.map { pt ->
-                if (pt.slot == slot) FocusPullPoint(slot, currentDiopters, metersLabel) else pt
-            }
             state.copy(
-                focusPullPoints = updated,
-                statusBanner = "ФОКУС-ТОЧКА [$slot] СОХРАНЕНА НА $metersLabel"
+                focusPullPoints = state.focusPullPoints.map { if (it.slot == slot) FocusPullPoint(slot, current, label) else it },
+                statusBanner = "Точка $slot записана: $label"
             )
         }
     }
 
     fun triggerRackFocusPull(slot: String) {
-        val targetPt = _uiState.value.focusPullPoints.find { it.slot == slot } ?: return
+        val target = _uiState.value.focusPullPoints.find { it.slot == slot } ?: return
         focusPullJob?.cancel()
         focusPullJob = viewModelScope.launch {
-            val startD = _uiState.value.manualFocusDiopters ?: 1.5f
-            val endD = targetPt.distanceDiopters
+            val start = _uiState.value.manualFocusDiopters ?: _uiState.value.liveExposure.focusDistanceDiopters
+            val end = target.distanceDiopters
             val duration = _uiState.value.focusPullDurationMs.coerceAtLeast(300L)
             val steps = 30
-            val stepDelay = duration / steps
-            _uiState.update {
-                it.copy(
-                    activeFocusPullSlot = slot,
-                    statusBanner = "RACK FOCUS // ПЕРЕВОД ФОКУСА -> [$slot] (${targetPt.labelMeters})"
-                )
-            }
+            _uiState.update { it.copy(activeFocusPullSlot = slot, statusBanner = "Перевод фокуса → $slot (${target.labelMeters})") }
             for (i in 1..steps) {
                 val t = i / steps.toFloat()
-                // Smooth ease-in-out cubic interpolation for cinema lens pull
-                val smoothT = t * t * (3f - 2f * t)
-                val interp = startD + (endD - startD) * smoothT
-                _uiState.update { it.copy(manualFocusDiopters = interp) }
-                delay(stepDelay)
+                val smooth = t * t * (3f - 2f * t)
+                _uiState.update { it.copy(manualFocusDiopters = start + (end - start) * smooth) }
+                pushParams()
+                delay(duration / steps)
             }
         }
     }
@@ -310,100 +691,103 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(focusPullDurationMs = durationMs) }
     }
 
-    fun setTapFocusPoint(normX: Float, normY: Float, toggleLock: Boolean = false) {
-        _uiState.update {
-            val locked = if (toggleLock) !it.aeAfLocked else it.aeAfLocked
-            it.copy(
-                tapFocusNormalized = Pair(normX, normY),
-                aeAfLocked = locked,
-                statusBanner = if (locked) "AE/AF LOCK // ЭКСПОЗИЦИЯ И ФОКУС ЗАБЛОКИРОВАНЫ" else "ТОЧЕЧНЫЙ ЗАМЕР И ФОКУС AF"
-            )
+    // ------------------------------------------------------------------------------------------
+    // Photo & video settings
+    // ------------------------------------------------------------------------------------------
+
+    fun cyclePhotoFormat() {
+        _uiState.update { s ->
+            val available = PhotoFormat.entries.filter { s.capabilities.photoFormats.contains(it) }
+            val next = available[(available.indexOf(s.photoFormat) + 1) % available.size]
+            s.copy(photoFormat = next, statusBanner = "Формат: ${next.label} · ${next.descRu}")
         }
     }
 
-    fun toggleAeAfLock() {
-        _uiState.update {
-            val next = !it.aeAfLocked
-            it.copy(
-                aeAfLocked = next,
-                statusBanner = if (next) "AE/AF LOCK АКТИВЕН" else "AE/AF LOCK СНЯТ"
-            )
+    fun cyclePhotoDrive() {
+        _uiState.update { s ->
+            val list = PhotoDriveMode.entries
+            val next = list[(list.indexOf(s.photoDriveMode) + 1) % list.size]
+            s.copy(photoDriveMode = next, statusBanner = next.labelRu)
         }
     }
 
-    fun setMeteringMode(mode: MeteringMode) {
-        _uiState.update { it.copy(meteringMode = mode, statusBanner = "ЗАМЕР ЭКСПОЗИЦИИ // ${mode.labelRu}") }
+    fun cycleSelfTimer() {
+        _uiState.update { s ->
+            val list = SelfTimer.entries
+            val next = list[(list.indexOf(s.selfTimer) + 1) % list.size]
+            s.copy(selfTimer = next, statusBanner = if (next == SelfTimer.OFF) "Таймер выключен" else "Таймер ${next.seconds} с")
+        }
     }
 
-    fun setStabilizationMode(mode: StabilizationMode) {
-        _uiState.update { it.copy(stabilizationMode = mode, statusBanner = "СТАБИЛИЗАЦИЯ // ${mode.labelRu}") }
+    fun cycleFlash() {
+        _uiState.update { s ->
+            if (!s.capabilities.hasFlash) return@update s.copy(statusBanner = "У этой камеры нет вспышки")
+            val list = FlashMode.entries
+            val next = list[(list.indexOf(s.flashMode) + 1) % list.size]
+            s.copy(flashMode = next, statusBanner = "Вспышка: ${next.labelRu}")
+        }
+        pushParams()
     }
 
-    fun setPhotoFormat(format: PhotoFormat) {
-        _uiState.update { it.copy(photoFormat = format, statusBanner = "ФОРМАТ ФОТО // ${format.label} (${format.bitDepth})") }
+    fun cycleVideoResolution() {
+        _uiState.update { s ->
+            val list = s.capabilities.videoResolutions
+            val next = list[(list.indexOf(s.videoResolution) + 1).mod(list.size)]
+            s.copy(videoResolution = next, statusBanner = "Разрешение: ${next.label} (${next.dimensions})")
+        }
     }
 
-    fun setPhotoDriveMode(drive: PhotoDriveMode) {
-        _uiState.update { it.copy(photoDriveMode = drive, statusBanner = "РЕЖИМ ПРИВОДА // ${drive.labelRu}") }
+    fun cycleVideoFps() {
+        _uiState.update { s ->
+            val list = s.capabilities.videoFps
+            val next = list[(list.indexOf(s.videoFps) + 1).mod(list.size)]
+            val ns = if (s.shutterNs > 0L && s.useShutterAngleInVideo) {
+                (1_000_000_000.0 * s.shutterAngleDeg / (360.0 * next.fps)).toLong()
+            } else s.shutterNs
+            s.copy(videoFps = next, shutterNs = ns, statusBanner = "Частота кадров: ${next.fps} к/с")
+        }
+        pushParams()
     }
 
-    fun cycleNdFilter() {
-        val stopsOrder = listOf(0, 3, 6, 10)
-        _uiState.update {
-            val nextIdx = (stopsOrder.indexOf(it.ndFilterStops) + 1) % stopsOrder.size
-            val nextStops = stopsOrder[nextIdx]
-            val label = when (nextStops) {
-                3 -> "ND8 (-3 EV)"
-                6 -> "ND64 (-6 EV)"
-                10 -> "ND1000 (-10 EV)"
-                else -> "БЕЗ ND"
+    fun cycleDynamicRange() {
+        _uiState.update { s ->
+            if (!s.capabilities.hdrVideo) return@update s.copy(statusBanner = "HDR-видео не поддерживается этой камерой")
+            val next = if (s.videoDynamicRange == VideoDynamicRange.SDR) VideoDynamicRange.HLG_10 else VideoDynamicRange.SDR
+            s.copy(videoDynamicRange = next, statusBanner = "${next.label} · ${next.descRu}")
+        }
+    }
+
+    fun toggleStabilization() {
+        _uiState.update { s ->
+            if (!s.capabilities.videoStabilization && !s.capabilities.previewStabilization) {
+                return@update s.copy(statusBanner = "Стабилизация недоступна на этой камере")
             }
-            it.copy(ndFilterStops = nextStops, statusBanner = "ОПТИЧЕСКИЙ СИМУЛЯТОР ND // $label")
+            s.copy(stabilization = !s.stabilization, statusBanner = if (!s.stabilization) "Стабилизация включена" else "Стабилизация выключена")
         }
     }
 
-    fun setVideoResolution(res: VideoResolution) {
-        _uiState.update { it.copy(videoResolution = res, statusBanner = "РАЗРЕШЕНИЕ КИНО // ${res.label} (${res.dimensions})") }
-    }
-
-    fun setVideoFps(fps: VideoFps) {
-        _uiState.update { state ->
-            val newDenom = if (state.useShutterAngleInVideo) {
-                ((fps.fps * 360f) / state.shutterAngleDeg).roundToInt().coerceAtLeast(1)
-            } else state.shutterDenominator
-            state.copy(
-                videoFps = fps,
-                shutterDenominator = newDenom,
-                statusBanner = "ЧАСТОТА КАДРОВ // ${fps.label}"
-            )
+    fun cycleAnamorphicDeSqueeze() {
+        _uiState.update { s ->
+            val list = AnamorphicDeSqueeze.entries
+            val next = list[(list.indexOf(s.anamorphicDeSqueeze) + 1) % list.size]
+            s.copy(anamorphicDeSqueeze = next, statusBanner = "Де-сквиз превью: ${next.descRu}")
         }
     }
 
-    fun setVideoCodec(codec: VideoCodecProfile) {
-        _uiState.update { it.copy(videoCodec = codec, statusBanner = "КОДЕК // ${codec.label} @ ${codec.bitrateMbps} Мбит/с") }
+    fun cycleAspectGuide() {
+        _uiState.update { s ->
+            val list = FrameAspectGuide.entries
+            val next = list[(list.indexOf(s.aspectGuide) + 1) % list.size]
+            s.copy(aspectGuide = next, statusBanner = "Рамка: ${next.descRu}")
+        }
     }
 
-    fun setAnamorphicDeSqueeze(mode: AnamorphicDeSqueeze) {
-        _uiState.update { it.copy(anamorphicDeSqueeze = mode, statusBanner = "ДЕ-СКВИЗ // ${mode.label} (${mode.descRu})") }
+    fun toggleAudioEnabled() {
+        _uiState.update { it.copy(audioEnabled = !it.audioEnabled, statusBanner = if (!it.audioEnabled) "Микрофон включён" else "Видео без звука") }
+        refreshAudioMeter()
     }
 
-    fun setAspectGuide(guide: FrameAspectGuide) {
-        _uiState.update { it.copy(aspectGuide = guide, statusBanner = "КАШЕТИРОВАНИЕ // ${guide.label}") }
-    }
-
-    fun setAudioGain(gainDb: Float) {
-        _uiState.update { it.copy(audioGainDb = gainDb.coerceIn(-12f, 12f)) }
-    }
-
-    fun toggleWindCut() {
-        _uiState.update { it.copy(windCutEnabled = !it.windCutEnabled) }
-    }
-
-    fun setAudioDirection(dir: AudioDirectionMode) {
-        _uiState.update { it.copy(audioDirection = dir, statusBanner = "МИКРОФОННЫЙ МАССИВ // ${dir.labelRu}") }
-    }
-
-    // Scopes & Overlays
+    // Scopes & overlays
     fun toggleHistogram() = _uiState.update { it.copy(showHistogramRgb = !it.showHistogramRgb) }
     fun toggleWaveform() = _uiState.update { it.copy(showWaveformScope = !it.showWaveformScope) }
     fun toggleVectorscope() = _uiState.update { it.copy(showVectorscope = !it.showVectorscope) }
@@ -411,249 +795,222 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     fun toggleHorizonLevel() = _uiState.update { it.copy(showHorizonLevel = !it.showHorizonLevel) }
 
     fun cycleZebraThreshold() {
-        val values = ZebraThreshold.entries
-        _uiState.update {
-            val next = values[(values.indexOf(it.zebraThreshold) + 1) % values.size]
-            it.copy(zebraThreshold = next, statusBanner = "ЗЕБРА ПЕРЕСВЕТОВ // ${next.label}")
+        _uiState.update { s ->
+            val values = ZebraThreshold.entries
+            val next = values[(values.indexOf(s.zebraThreshold) + 1) % values.size]
+            s.copy(zebraThreshold = next, statusBanner = if (next == ZebraThreshold.OFF) "Зебра выключена" else "Зебра от ${next.label}")
         }
+        pushParams()
     }
 
     fun cycleFocusPeaking() {
-        val values = FocusPeakingColor.entries
-        _uiState.update {
-            val next = values[(values.indexOf(it.focusPeakingColor) + 1) % values.size]
-            it.copy(focusPeakingColor = next, statusBanner = "ФОКУС-ПИКИНГ // ${next.labelRu}")
+        _uiState.update { s ->
+            val values = FocusPeakingColor.entries
+            val next = values[(values.indexOf(s.focusPeakingColor) + 1) % values.size]
+            s.copy(focusPeakingColor = next, statusBanner = if (next == FocusPeakingColor.OFF) "Пикинг выключен" else "Пикинг: ${next.labelRu.lowercase()}")
         }
     }
 
     fun cycleGridOverlay() {
-        val values = GridOverlayMode.entries
-        _uiState.update {
-            val next = values[(values.indexOf(it.gridOverlayMode) + 1) % values.size]
-            it.copy(gridOverlayMode = next, statusBanner = "КОМПОЗИЦИОННАЯ СЕТКА // ${next.labelRu}")
+        _uiState.update { s ->
+            val values = GridOverlayMode.entries
+            val next = values[(values.indexOf(s.gridOverlayMode) + 1) % values.size]
+            s.copy(gridOverlayMode = next, statusBanner = "Сетка: ${next.labelRu}")
         }
     }
 
-    // Nothing Phone (2) Glyph Studio
+    // ------------------------------------------------------------------------------------------
+    // Glyph
+    // ------------------------------------------------------------------------------------------
+
     fun selectGlyphLightingMode(mode: GlyphLightingMode) {
-        val defaultSegments = when (mode) {
-            GlyphLightingMode.OFF -> emptySet()
-            GlyphLightingMode.STUDIO_SOFT_FILL -> (0..10).toSet()
-            GlyphLightingMode.CAMERA_RING_MACRO -> setOf(0, 1)
-            GlyphLightingMode.PORTRAIT_CATCHLIGHT -> setOf(0, 1, 2, 4, 5, 6, 7, 8)
-            GlyphLightingMode.TALLY_AND_AUDIO_VU -> setOf(2, 9, 10)
-        }
         _uiState.update {
             it.copy(
                 glyphMode = mode,
-                activeGlyphSegments = defaultSegments,
-                glyphTorchHardwareSync = mode == GlyphLightingMode.STUDIO_SOFT_FILL || mode == GlyphLightingMode.CAMERA_RING_MACRO,
-                statusBanner = "GLYPH MATRIX // ${mode.titleRu}"
+                activeGlyphSegments = mode.segments,
+                statusBanner = "Glyph: ${mode.titleRu}"
             )
         }
+        pushGlyph()
     }
 
     fun toggleGlyphSegment(segmentIndex: Int) {
         _uiState.update { state ->
             val next = state.activeGlyphSegments.toMutableSet()
-            if (next.contains(segmentIndex)) next.remove(segmentIndex) else next.add(segmentIndex)
-            state.copy(activeGlyphSegments = next)
+            if (!next.add(segmentIndex)) next.remove(segmentIndex)
+            state.copy(
+                activeGlyphSegments = next,
+                glyphMode = if (state.glyphMode == GlyphLightingMode.OFF && next.isNotEmpty()) GlyphLightingMode.STUDIO_SOFT_FILL else state.glyphMode
+            )
         }
+        pushGlyph()
     }
 
     fun setGlyphBrightness(percent: Int) {
         _uiState.update { it.copy(glyphBrightness = percent.coerceIn(0, 100)) }
+        pushGlyph()
     }
 
     fun toggleGlyphTorchHardware() {
         _uiState.update { it.copy(glyphTorchHardwareSync = !it.glyphTorchHardwareSync) }
+        pushParams()
     }
 
-    // LUT & Color Grading
+    fun reconnectGlyph() = glyph.connect()
+
+    // ------------------------------------------------------------------------------------------
+    // LUT & grading
+    // ------------------------------------------------------------------------------------------
+
     fun selectLutProfile(lut: LutProfile) {
-        _uiState.update {
-            it.copy(
-                activeLut = lut,
-                statusBanner = "3D LUT АКТИВЕН // ${lut.nameRu}"
-            )
-        }
+        _uiState.update { it.copy(activeLut = lut, statusBanner = "LUT: ${lut.nameRu}") }
     }
 
     fun updateColorGrading(
         contrast: Float = _uiState.value.userContrast,
         saturation: Float = _uiState.value.userSaturation,
         shadowLift: Float = _uiState.value.shadowLift,
-        highlightRollOff: Float = _uiState.value.highlightRollOff,
-        grain: Float = _uiState.value.filmGrainAmount
+        highlightRollOff: Float = _uiState.value.highlightRollOff
     ) {
         _uiState.update {
             it.copy(
                 userContrast = contrast.coerceIn(0.5f, 1.5f),
                 userSaturation = saturation.coerceIn(0.0f, 1.8f),
                 shadowLift = shadowLift.coerceIn(-0.4f, 0.4f),
-                highlightRollOff = highlightRollOff.coerceIn(0.0f, 1.0f),
-                filmGrainAmount = grain.coerceIn(0.0f, 1.0f)
+                highlightRollOff = highlightRollOff.coerceIn(0.0f, 1.0f)
             )
         }
     }
 
-    fun toggleSplitScreenLut() {
-        _uiState.update { it.copy(splitScreenLutCompare = !it.splitScreenLutCompare) }
+    fun toggleBakeLut() {
+        _uiState.update { it.copy(bakeLutIntoPhotos = !it.bakeLutIntoPhotos) }
     }
 
     fun resetColorGrade() {
-        _uiState.update {
-            it.copy(
-                userContrast = 1.0f,
-                userSaturation = 1.0f,
-                shadowLift = 0.0f,
-                highlightRollOff = 0.15f,
-                filmGrainAmount = 0.10f
-            )
-        }
+        _uiState.update { it.copy(userContrast = 1.0f, userSaturation = 1.0f, shadowLift = 0.0f, highlightRollOff = 0.15f) }
     }
 
-    // Telemetry callbacks from ProCameraController
-    fun updateScopeTelemetry(telemetry: LiveScopeTelemetry) {
-        _uiState.update { it.copy(scopeTelemetry = telemetry) }
-    }
-
-    fun updateHorizon(rollDeg: Float, pitchDeg: Float) {
-        _uiState.update { it.copy(rollDegrees = rollDeg, pitchDegrees = pitchDeg) }
-    }
-
-    fun updateAudioLevels(leftDb: Float, rightDb: Float, peakDb: Float) {
-        _uiState.update {
-            it.copy(
-                leftAudioDb = leftDb,
-                rightAudioDb = rightDb,
-                peakAudioDb = peakDb
-            )
-        }
-    }
-
-    fun updateRecordingState(isRec: Boolean, elapsedSec: Int) {
-        _uiState.update {
-            it.copy(
-                isRecording = isRec,
-                recordingElapsedSec = elapsedSec
-            )
-        }
-    }
-
-    fun triggerShutterFlash() {
-        _uiState.update { it.copy(shutterFlashTrigger = System.currentTimeMillis()) }
-    }
-
-    fun updateStatusBanner(msg: String) {
-        _uiState.update { it.copy(statusBanner = msg) }
-    }
-
-    fun recordCapturedShot(file: File, isVideo: Boolean, durationSec: Int) {
-        val state = _uiState.value
-        val hist16 = (0 until 16).joinToString(",") { idx ->
-            val bin = state.scopeTelemetry.lumaHistogram[(idx * 4).coerceAtMost(63)]
-            bin.toString()
-        }
-        val shot = CapturedShotEntity(
-            filePath = file.absolutePath,
-            isVideo = isVideo,
-            durationSec = durationSec,
-            titleCode = file.name,
-            lensInfo = "${state.selectedLens.focalLabel} ${state.selectedLens.sensorName}",
-            resolutionLabel = if (isVideo) "${state.videoResolution.label} (${state.videoResolution.dimensions})" else state.photoFormat.label,
-            formatBadge = if (isVideo) state.videoCodec.label else "${state.photoFormat.badge} ${state.photoFormat.bitDepth}",
-            isoUsed = if (state.isoValue == 0) 160 else state.isoValue,
-            shutterLabel = state.shutterDisplayLabel,
-            wbKelvin = if (state.wbKelvin == 0) 5500 else state.wbKelvin,
-            apertureLabel = state.selectedLens.aperture,
-            evValue = state.evCompensation,
-            lutApplied = state.activeLut.code,
-            glyphModeUsed = state.glyphMode.code,
-            averageIre = state.scopeTelemetry.averageIre,
-            dynamicRangeStops = state.scopeTelemetry.dynamicRangeStops,
-            bitrateMbps = if (isVideo) state.videoCodec.bitrateMbps else 0,
-            audioPeakDb = state.peakAudioDb,
-            histogramSummary = hist16
-        )
-        viewModelScope.launch {
-            repository.logCapturedShot(shot)
-            _uiState.update {
-                it.copy(
-                    statusBanner = if (isVideo) "ВИДЕО СОХРАНЕНО // ${file.name}" else "КАДР СОХРАНЁН // ${file.name} (${state.photoFormat.badge})"
-                )
-            }
-        }
-    }
+    // ------------------------------------------------------------------------------------------
+    // Presets
+    // ------------------------------------------------------------------------------------------
 
     fun saveCurrentAsPreset(customName: String) {
         val s = _uiState.value
         val nextSlotNumber = (presets.value.size + 1).coerceAtMost(99)
         val preset = CameraPresetEntity(
             slotCode = "C$nextSlotNumber",
-            name = customName.ifBlank { "${s.selectedLens.focalLabel} ${s.activeLut.code} RIG" }.uppercase(),
-            isVideoPreset = s.activeMode == AppMode.CINE_VIDEO,
-            lensId = s.selectedLens.id,
+            name = customName.ifBlank { "${s.zoomLabel} ${s.activeLut.code} ${if (s.isVideoMode) "VIDEO" else "PHOTO"}" }.uppercase(),
+            isVideoPreset = s.cameraMode == AppMode.CINE_VIDEO,
+            zoomRatio = s.zoomRatio,
+            useFrontCamera = s.useFrontCamera,
             isoValue = s.isoValue,
-            shutterDenominator = s.shutterDenominator,
+            shutterNs = s.shutterNs,
             shutterAngleDeg = s.shutterAngleDeg,
-            wbKelvin = s.wbKelvin,
+            awbPreset = s.awbPreset.name,
             evCompensation = s.evCompensation,
             lutId = s.activeLut.id,
             anamorphicLabel = s.anamorphicDeSqueeze.label,
             aspectGuideLabel = s.aspectGuide.label,
             glyphModeName = s.glyphMode.name,
-            glyphBrightness = s.glyphBrightness
+            glyphBrightness = s.glyphBrightness,
+            videoResolution = s.videoResolution.name,
+            videoFps = s.videoFps.fps,
+            hdrVideo = s.videoDynamicRange == VideoDynamicRange.HLG_10
         )
         viewModelScope.launch {
             repository.savePreset(preset)
-            _uiState.update { it.copy(statusBanner = "ПРЕСЕТ [${preset.slotCode}] СОХРАНЁН В ПАМЯТЬ") }
+            _uiState.update { it.copy(statusBanner = "Пресет ${preset.slotCode} сохранён") }
         }
     }
 
     fun applyPreset(preset: CameraPresetEntity) {
-        val lens = NothingLens.entries.find { it.id == preset.lensId } ?: NothingLens.MAIN_WIDE
         val lut = LutProfile.entries.find { it.id == preset.lutId } ?: LutProfile.NOTHING_STD
         val anamorphic = AnamorphicDeSqueeze.entries.find { it.label == preset.anamorphicLabel } ?: AnamorphicDeSqueeze.NONE
         val guide = FrameAspectGuide.entries.find { it.label == preset.aspectGuideLabel } ?: FrameAspectGuide.OFF
-        val glyph = GlyphLightingMode.entries.find { it.name == preset.glyphModeName } ?: GlyphLightingMode.OFF
+        val glyphMode = GlyphLightingMode.entries.find { it.name == preset.glyphModeName } ?: GlyphLightingMode.OFF
+        val awb = AwbPreset.entries.find { it.name == preset.awbPreset } ?: AwbPreset.AUTO
+        val resolution = VideoResolution.entries.find { it.name == preset.videoResolution }
+        val fps = VideoFps.entries.find { it.fps == preset.videoFps }
 
-        _uiState.update {
-            it.copy(
+        _uiState.update { s ->
+            val caps = s.capabilities
+            s.copy(
                 activeMode = if (preset.isVideoPreset) AppMode.CINE_VIDEO else AppMode.PHOTO_PRO,
-                selectedLens = lens,
-                fineZoomRatio = lens.zoomRatio,
+                lastCameraMode = if (preset.isVideoPreset) AppMode.CINE_VIDEO else AppMode.PHOTO_PRO,
+                useFrontCamera = preset.useFrontCamera,
                 isoValue = preset.isoValue,
-                shutterDenominator = preset.shutterDenominator,
+                shutterNs = preset.shutterNs,
                 shutterAngleDeg = preset.shutterAngleDeg,
-                wbKelvin = preset.wbKelvin,
+                awbPreset = awb,
                 evCompensation = preset.evCompensation,
                 activeLut = lut,
                 anamorphicDeSqueeze = anamorphic,
                 aspectGuide = guide,
-                glyphMode = glyph,
+                glyphMode = glyphMode,
+                activeGlyphSegments = glyphMode.segments,
                 glyphBrightness = preset.glyphBrightness,
-                statusBanner = "ЗАГРУЖЕН ПРЕСЕТ [${preset.slotCode}] // ${preset.name}"
+                videoResolution = resolution?.takeIf { caps.videoResolutions.contains(it) } ?: s.videoResolution,
+                videoFps = fps?.takeIf { caps.videoFps.contains(it) } ?: s.videoFps,
+                videoDynamicRange = if (preset.hdrVideo && caps.hdrVideo) VideoDynamicRange.HLG_10 else VideoDynamicRange.SDR,
+                statusBanner = "Пресет ${preset.slotCode}: ${preset.name}"
             )
         }
+        controller.setZoomRatio(preset.zoomRatio)
+        pushParams()
+        pushGlyph()
+        refreshAudioMeter()
     }
 
     fun deletePreset(id: Int) {
-        viewModelScope.launch {
-            repository.deletePreset(id)
-        }
+        viewModelScope.launch { repository.deletePreset(id) }
     }
+
+    // ------------------------------------------------------------------------------------------
+    // Archive
+    // ------------------------------------------------------------------------------------------
 
     fun inspectCapturedShot(shot: CapturedShotEntity?) {
         _uiState.update { it.copy(inspectShot = shot) }
     }
 
-    fun deleteCapturedShot(id: Int) {
+    fun deleteCapturedShot(shot: CapturedShotEntity) {
         viewModelScope.launch {
-            repository.deleteCapturedShot(id)
-            if (_uiState.value.inspectShot?.id == id) {
-                _uiState.update { it.copy(inspectShot = null) }
+            val removed = withContext(Dispatchers.IO) {
+                try {
+                    getApplication<Application>().contentResolver.delete(Uri.parse(shot.uri), null, null) >= 0
+                } catch (e: SecurityException) {
+                    false
+                } catch (e: Exception) {
+                    true
+                }
+            }
+            if (removed) {
+                repository.deleteCapturedShot(shot.id)
+                if (_uiState.value.inspectShot?.id == shot.id) _uiState.update { it.copy(inspectShot = null) }
+            } else {
+                _uiState.update { it.copy(statusBanner = "Файл можно удалить только через системную галерею") }
             }
         }
+    }
+
+    private suspend fun purgeMissingShots() {
+        val resolver = getApplication<Application>().contentResolver
+        val shots = repository.allShotsOnce()
+        withContext(Dispatchers.IO) {
+            shots.forEach { shot ->
+                val exists = try {
+                    resolver.query(Uri.parse(shot.uri), arrayOf("_id"), null, null, null)?.use { it.count > 0 } ?: false
+                } catch (e: Exception) {
+                    false
+                }
+                if (!exists) repository.deleteCapturedShot(shot.id)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        glyph.release()
+        controller.release()
+        super.onCleared()
     }
 }

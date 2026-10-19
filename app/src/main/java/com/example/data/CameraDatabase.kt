@@ -15,45 +15,51 @@ import kotlinx.coroutines.flow.Flow
 @Entity(tableName = "camera_presets")
 data class CameraPresetEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val slotCode: String, // e.g., "C1", "C2", "C3", "C4"
+    val slotCode: String, // "C1", "C2", ...
     val name: String,
     val isVideoPreset: Boolean,
-    val lensId: String,
+    val zoomRatio: Float,
+    val useFrontCamera: Boolean,
     val isoValue: Int, // 0 = AUTO
-    val shutterDenominator: Int, // 0 = AUTO, e.g. 48 for 1/48s
-    val shutterAngleDeg: Float, // e.g. 180f
-    val wbKelvin: Int, // 0 = AWB
+    val shutterNs: Long, // 0 = AUTO
+    val shutterAngleDeg: Float,
+    val awbPreset: String,
     val evCompensation: Float,
     val lutId: String,
     val anamorphicLabel: String,
     val aspectGuideLabel: String,
     val glyphModeName: String,
     val glyphBrightness: Int,
+    val videoResolution: String,
+    val videoFps: Int,
+    val hdrVideo: Boolean,
     val createdAt: Long = System.currentTimeMillis()
 )
 
+/** One photo or video this app wrote to MediaStore, plus what we know about how it was shot. */
 @Entity(tableName = "captured_shots")
 data class CapturedShotEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val filePath: String,
+    val uri: String,
     val isVideo: Boolean,
-    val durationSec: Int,
-    val titleCode: String, // e.g. "NTH2_C001_RAW"
-    val lensInfo: String,
-    val resolutionLabel: String,
-    val formatBadge: String,
-    val isoUsed: Int,
+    val displayName: String,
+    val mimeType: String,
+    val width: Int,
+    val height: Int,
+    val sizeBytes: Long,
+    val durationMs: Long,
+    val isoUsed: Int, // 0 = unknown
     val shutterLabel: String,
-    val wbKelvin: Int,
     val apertureLabel: String,
+    val focalLabel: String,
+    val zoomRatio: Float,
+    val wbLabel: String,
     val evValue: Float,
     val lutApplied: String,
+    val lutBaked: Boolean,
     val glyphModeUsed: String,
-    val averageIre: Int,
-    val dynamicRangeStops: Float,
-    val bitrateMbps: Int,
-    val audioPeakDb: Float,
-    val histogramSummary: String, // comma-separated 16 bins for instant mini-scope rendering
+    val cameraLabel: String,
+    val histogramSummary: String, // 16 comma-separated bins computed from the saved file
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -74,19 +80,19 @@ interface CameraDao {
     @Query("SELECT * FROM captured_shots ORDER BY timestamp DESC")
     fun getAllCapturedShots(): Flow<List<CapturedShotEntity>>
 
+    @Query("SELECT * FROM captured_shots")
+    suspend fun getAllCapturedShotsOnce(): List<CapturedShotEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCapturedShot(shot: CapturedShotEntity)
 
     @Query("DELETE FROM captured_shots WHERE id = :id")
     suspend fun deleteCapturedShot(id: Int)
-
-    @Query("SELECT COUNT(*) FROM captured_shots")
-    suspend fun getShotCount(): Int
 }
 
 @Database(
     entities = [CameraPresetEntity::class, CapturedShotEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class GlyphCamDatabase : RoomDatabase() {
@@ -118,122 +124,53 @@ class CameraRepository(private val dao: CameraDao) {
     suspend fun deletePreset(id: Int) = dao.deletePreset(id)
     suspend fun logCapturedShot(shot: CapturedShotEntity) = dao.insertCapturedShot(shot)
     suspend fun deleteCapturedShot(id: Int) = dao.deleteCapturedShot(id)
+    suspend fun allShotsOnce(): List<CapturedShotEntity> = dao.getAllCapturedShotsOnce()
 
+    /** Two starter presets so the C1/C2 chips do something on a fresh install. */
     suspend fun seedFactoryPresetsIfNeeded() {
         if (dao.getPresetCount() == 0) {
-            val defaults = listOf(
+            dao.insertPreset(
                 CameraPresetEntity(
                     slotCode = "C1",
-                    name = "NIGHT CINE // 24P 180°",
+                    name = "КИНО 24P · TEAL & ORANGE",
                     isVideoPreset = true,
-                    lensId = "main",
-                    isoValue = 800,
-                    shutterDenominator = 48,
+                    zoomRatio = 1.0f,
+                    useFrontCamera = false,
+                    isoValue = 0,
+                    shutterNs = 0L,
                     shutterAngleDeg = 180f,
-                    wbKelvin = 3200,
+                    awbPreset = "AUTO",
                     evCompensation = -0.3f,
-                    lutId = "cyber_2099",
-                    anamorphicLabel = "1.33x ANA",
-                    aspectGuideLabel = "2.39:1 SCOPE",
-                    glyphModeName = "PORTRAIT_CATCHLIGHT",
-                    glyphBrightness = 65
-                ),
+                    lutId = "kodak_2383",
+                    anamorphicLabel = "1.00x",
+                    aspectGuideLabel = "2.39:1",
+                    glyphModeName = "OFF",
+                    glyphBrightness = 60,
+                    videoResolution = "UHD_4K",
+                    videoFps = 24,
+                    hdrVideo = false
+                )
+            )
+            dao.insertPreset(
                 CameraPresetEntity(
                     slotCode = "C2",
-                    name = "IMX890 STREET RAW // B&W",
+                    name = "УЛИЦА · Ч/Б",
                     isVideoPreset = false,
-                    lensId = "cine35",
-                    isoValue = 100,
-                    shutterDenominator = 500,
-                    shutterAngleDeg = 90f,
-                    wbKelvin = 5600,
+                    zoomRatio = 2.0f,
+                    useFrontCamera = false,
+                    isoValue = 0,
+                    shutterNs = 0L,
+                    shutterAngleDeg = 180f,
+                    awbPreset = "AUTO",
                     evCompensation = -0.7f,
                     lutId = "mono_red",
-                    anamorphicLabel = "1.00x SPH",
-                    aspectGuideLabel = "Off",
+                    anamorphicLabel = "1.00x",
+                    aspectGuideLabel = "БЕЗ РАМКИ",
                     glyphModeName = "OFF",
-                    glyphBrightness = 0
-                ),
-                CameraPresetEntity(
-                    slotCode = "C3",
-                    name = "JN1 MACRO 4CM // RING FILL",
-                    isVideoPreset = false,
-                    lensId = "ultra",
-                    isoValue = 200,
-                    shutterDenominator = 250,
-                    shutterAngleDeg = 180f,
-                    wbKelvin = 5200,
-                    evCompensation = 0.0f,
-                    lutId = "nothing_std",
-                    anamorphicLabel = "1.00x SPH",
-                    aspectGuideLabel = "1:1 MEDIUM",
-                    glyphModeName = "CAMERA_RING_MACRO",
-                    glyphBrightness = 90
-                ),
-                CameraPresetEntity(
-                    slotCode = "C4",
-                    name = "N-LOG 12-STOP // KODAK 2383",
-                    isVideoPreset = true,
-                    lensId = "main",
-                    isoValue = 400,
-                    shutterDenominator = 48,
-                    shutterAngleDeg = 180f,
-                    wbKelvin = 5600,
-                    evCompensation = 0.0f,
-                    lutId = "n_log_flat",
-                    anamorphicLabel = "1.55x SCOPE",
-                    aspectGuideLabel = "2.39:1 SCOPE",
-                    glyphModeName = "TALLY_AND_AUDIO_VU",
-                    glyphBrightness = 45
-                )
-            )
-            defaults.forEach { dao.insertPreset(it) }
-        }
-        if (dao.getShotCount() == 0) {
-            dao.insertCapturedShot(
-                CapturedShotEntity(
-                    filePath = "CALIBRATION_REF_IMX890_DNG",
-                    isVideo = false,
-                    durationSec = 0,
-                    titleCode = "NTH2_0001_IMX890.DNG",
-                    lensInfo = "24mm SONY IMX890 • f/1.88 OIS",
-                    resolutionLabel = "50MP (8192×6144)",
-                    formatBadge = "DNG 12-BIT",
-                    isoUsed = 100,
-                    shutterLabel = "1/250s",
-                    wbKelvin = 5600,
-                    apertureLabel = "f/1.88",
-                    evValue = -0.3f,
-                    lutApplied = "N-LOG",
-                    glyphModeUsed = "FILL 100%",
-                    averageIre = 52,
-                    dynamicRangeStops = 12.4f,
-                    bitrateMbps = 0,
-                    audioPeakDb = -18.0f,
-                    histogramSummary = "8,14,26,42,58,74,88,94,86,70,54,40,28,18,10,4"
-                )
-            )
-            dao.insertCapturedShot(
-                CapturedShotEntity(
-                    filePath = "CALIBRATION_REF_CINE_MOV",
-                    isVideo = true,
-                    durationSec = 18,
-                    titleCode = "NTH2_A002_CINE24P.MP4",
-                    lensInfo = "35mm IMX890 CINE • 1.33x ANA",
-                    resolutionLabel = "4K DCI (4096×2160)",
-                    formatBadge = "H.265 10-BIT",
-                    isoUsed = 800,
-                    shutterLabel = "180.0° (1/48s)",
-                    wbKelvin = 3200,
-                    apertureLabel = "f/1.88",
-                    evValue = 0.0f,
-                    lutApplied = "K-2383",
-                    glyphModeUsed = "VU+REC",
-                    averageIre = 46,
-                    dynamicRangeStops = 11.9f,
-                    bitrateMbps = 180,
-                    audioPeakDb = -6.4f,
-                    histogramSummary = "15,28,45,62,78,82,75,64,52,44,36,28,22,16,9,3"
+                    glyphBrightness = 0,
+                    videoResolution = "FHD_1080P",
+                    videoFps = 30,
+                    hdrVideo = false
                 )
             )
         }
