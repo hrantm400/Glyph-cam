@@ -4,12 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,9 +22,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,16 +37,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.data.CapturedShotEntity
+import com.example.ui.components.CodeBadge
+import com.example.ui.components.NothingCard
+import com.example.ui.components.SectionLabel
+import com.example.ui.components.StudioHeader
 import com.example.ui.theme.NothingBlack
-import com.example.ui.theme.NothingBorder
-import com.example.ui.theme.NothingObsidian
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingSilver
 import com.example.ui.theme.NothingSurface
-import com.example.ui.theme.NothingSurfaceHigh
 import com.example.ui.theme.NothingWhite
 import com.example.ui.theme.ScopeAmber
 import com.example.ui.theme.ScopeCyan
@@ -62,160 +66,160 @@ fun MediaVaultScreen(
     onBackToCamera: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BackHandler {
-        if (inspectedShot != null) {
-            onSelectShot(null)
-        } else {
-            onBackToCamera()
-        }
+    val goBack: () -> Unit = {
+        if (inspectedShot != null) onSelectShot(null) else onBackToCamera()
     }
+    BackHandler(onBack = goBack)
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(NothingBlack)
-            .padding(16.dp)
             .testTag("media_vault_screen")
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = {
-                        if (inspectedShot != null) onSelectShot(null) else onBackToCamera()
-                    },
-                    modifier = Modifier.testTag("vault_back_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Назад",
-                        tint = NothingWhite
-                    )
-                }
-                Column {
-                    Text(
-                        text = "EXIF & ТЕЛЕМЕТРИЯ // АРХИВ",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = NothingWhite
-                    )
-                    Text(
-                        text = "ВСЕГО КАДРОВ И ДУБЛЕЙ: ${shots.size} • DNG RAW & 4K CINE",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = NothingSilver
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Detailed EXIF + Histogram Inspector Card when a shot is selected
-        val activeShot = inspectedShot ?: shots.firstOrNull()
-        if (activeShot != null) {
-            ExifTelemetryLoupeCard(shot = activeShot)
-            Spacer(modifier = Modifier.height(14.dp))
-        }
-
-        Text(
-            text = "ЖУРНАЛ ОТНЯТЫХ ДУБЛЕЙ И КАДРОВ",
-            style = MaterialTheme.typography.labelLarge,
-            color = NothingSilver
+        StudioHeader(
+            title = "Архив",
+            subtitle = "${shots.size} ${pluralShots(shots.size)} · DNG RAW · 4K CINE",
+            onBack = goBack,
+            backTag = "vault_back_btn"
         )
-        Spacer(modifier = Modifier.height(8.dp))
+
+        if (shots.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PhotoLibrary,
+                    contentDescription = null,
+                    tint = NothingSilver,
+                    modifier = Modifier.size(36.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Пока нет кадров",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = NothingWhite
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Снимки и дубли появятся здесь вместе с их EXIF-телеметрией.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingSilver,
+                    textAlign = TextAlign.Center
+                )
+            }
+            return@Column
+        }
+
+        val activeShot = inspectedShot ?: shots.first()
 
         LazyColumn(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            item(key = "loupe") {
+                ExifTelemetryLoupeCard(shot = activeShot)
+                Spacer(modifier = Modifier.height(10.dp))
+                SectionLabel(text = "Снятые кадры и дубли")
+            }
             items(shots, key = { it.id }) { shot ->
-                val isSelected = activeShot?.id == shot.id
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (isSelected) NothingSurfaceHigh else NothingObsidian)
-                        .border(
-                            1.dp,
-                            if (isSelected) NothingRed else NothingBorder,
-                            RoundedCornerShape(10.dp)
-                        )
-                        .clickable { onSelectShot(shot) }
-                        .padding(12.dp)
-                        .testTag("vault_shot_${shot.id}"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (shot.isVideo) NothingRed.copy(alpha = 0.22f) else ScopeCyan.copy(alpha = 0.18f))
-                                .border(
-                                    1.dp,
-                                    if (shot.isVideo) NothingRed else ScopeCyan,
-                                    RoundedCornerShape(8.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (shot.isVideo) Icons.Default.Videocam else Icons.Default.CameraAlt,
-                                contentDescription = null,
-                                tint = if (shot.isVideo) NothingRed else ScopeCyan
-                            )
-                        }
-                        Column {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = shot.titleCode,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = NothingWhite
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(NothingSurface)
-                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = shot.formatBadge,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = ScopeAmber,
-                                        fontSize = 9.sp
-                                    )
-                                }
-                            }
-                            Text(
-                                text = "${shot.lensInfo} • ISO ${shot.isoUsed} • ${shot.shutterLabel} • ${shot.wbKelvin}K",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = NothingSilver,
-                                fontSize = 10.sp
-                            )
-                        }
-                    }
+                ShotRow(
+                    shot = shot,
+                    selected = activeShot.id == shot.id,
+                    onSelect = { onSelectShot(shot) },
+                    onDelete = { onDeleteShot(shot.id) }
+                )
+            }
+        }
+    }
+}
 
-                    IconButton(
-                        onClick = { onDeleteShot(shot.id) },
-                        modifier = Modifier.testTag("delete_shot_${shot.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Удалить кадр",
-                            tint = NothingSilver
-                        )
-                    }
+private fun pluralShots(count: Int): String {
+    val n = count % 100
+    val n1 = count % 10
+    return when {
+        n in 11..19 -> "КАДРОВ"
+        n1 == 1 -> "КАДР"
+        n1 in 2..4 -> "КАДРА"
+        else -> "КАДРОВ"
+    }
+}
+
+@Composable
+private fun ShotRow(
+    shot: CapturedShotEntity,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    NothingCard(
+        selected = selected,
+        accent = NothingRed,
+        onClick = onSelect,
+        contentPadding = PaddingValues(start = 10.dp, top = 8.dp, bottom = 8.dp, end = 2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("vault_shot_${shot.id}")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val tint = if (shot.isVideo) NothingRed else ScopeCyan
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(tint.copy(alpha = 0.16f))
+                    .border(1.dp, tint.copy(alpha = 0.8f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (shot.isVideo) Icons.Default.Videocam else Icons.Default.CameraAlt,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = shot.titleCode,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = NothingWhite,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    CodeBadge(text = shot.formatBadge, color = ScopeAmber)
                 }
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = "${shot.lensInfo} · ISO ${shot.isoUsed} · ${shot.shutterLabel} · ${shot.wbKelvin}K",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NothingSilver,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.testTag("delete_shot_${shot.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Удалить кадр",
+                    tint = NothingSilver
+                )
             }
         }
     }
@@ -223,87 +227,95 @@ fun MediaVaultScreen(
 
 @Composable
 private fun ExifTelemetryLoupeCard(shot: CapturedShotEntity) {
-    val dateFmt = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(Date(shot.timestamp))
+    val dateFmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(shot.timestamp))
     val histValues = shot.histogramSummary.split(",").mapNotNull { it.trim().toIntOrNull() }
 
-    Column(
+    NothingCard(
+        selected = true,
+        accent = NothingRed.copy(alpha = 0.7f),
+        contentPadding = PaddingValues(14.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(NothingObsidian)
-            .border(1.dp, NothingRed.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-            .padding(14.dp)
             .testTag("exif_inspector_card")
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "МЕТАДАННЫЕ КАДРА // ${shot.titleCode}",
+                    text = shot.titleCode,
                     style = MaterialTheme.typography.labelLarge,
-                    color = NothingRed
+                    color = NothingWhite,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${shot.lensInfo} • $dateFmt",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = NothingSilver
+                    text = "${shot.lensInfo} · $dateFmt",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NothingSilver,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(NothingSurfaceHigh)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = shot.lutApplied,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = ScopeCyan
-                )
-            }
+            Spacer(modifier = Modifier.width(10.dp))
+            CodeBadge(text = shot.lutApplied, color = ScopeCyan)
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // 4x2 EXIF Grid
+        val resolutionMain = shot.resolutionLabel.substringBefore(" (")
+        val resolutionSub = shot.resolutionLabel.substringAfter(" (", "").removeSuffix(")").ifBlank { null }
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ExifMetricCell("РАЗРЕШЕНИЕ", shot.resolutionLabel, Modifier.weight(1f))
-            ExifMetricCell("ВЫДЕРЖКА", shot.shutterLabel, Modifier.weight(1f))
-            ExifMetricCell("ISO / ДИАФР.", "ISO ${shot.isoUsed} ${shot.apertureLabel}", Modifier.weight(1f))
+            ExifMetricCell("РАЗРЕШЕНИЕ", resolutionMain, resolutionSub, Modifier.weight(1f))
+            ExifMetricCell("ВЫДЕРЖКА", shot.shutterLabel, null, Modifier.weight(1f))
+            ExifMetricCell("ISO · ДИАФР.", "ISO ${shot.isoUsed}", shot.apertureLabel, Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(6.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ExifMetricCell("БАЛАНС БЕЛОГО", "${shot.wbKelvin}K (EV ${String.format(Locale.US, "%+.1f", shot.evValue)})", Modifier.weight(1f))
-            ExifMetricCell("ДИНАМ. ДИАПАЗОН", "${shot.dynamicRangeStops} STOPS (${shot.averageIre} IRE)", Modifier.weight(1f))
             ExifMetricCell(
-                if (shot.isVideo) "ПОТОК / ЗВУК" else "GLYPH СВЕТ",
-                if (shot.isVideo) "${shot.bitrateMbps}M / ${String.format(Locale.US, "%.1fdB", shot.audioPeakDb)}" else shot.glyphModeUsed,
+                "БАЛАНС БЕЛОГО",
+                "${shot.wbKelvin}K",
+                String.format(Locale.US, "EV %+.1f", shot.evValue),
                 Modifier.weight(1f)
             )
+            ExifMetricCell(
+                "ДИАПАЗОН",
+                String.format(Locale.US, "%.1f STOPS", shot.dynamicRangeStops),
+                "${shot.averageIre} IRE",
+                Modifier.weight(1f)
+            )
+            if (shot.isVideo) {
+                ExifMetricCell(
+                    "ПОТОК · ЗВУК",
+                    "${shot.bitrateMbps} Mbps",
+                    String.format(Locale.US, "%.1f dB", shot.audioPeakDb),
+                    Modifier.weight(1f)
+                )
+            } else {
+                ExifMetricCell("GLYPH", shot.glyphModeUsed, null, Modifier.weight(1f))
+            }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "ОТik-СПЕКТР ЯРКОСТИ КАДРА (16-BIN IRE SIGNATURE)",
-            style = MaterialTheme.typography.labelMedium,
-            color = NothingSilver,
-            fontSize = 9.sp
-        )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionLabel(text = "Гистограмма яркости · 16 bin")
+        Spacer(modifier = Modifier.height(6.dp))
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(38.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .height(40.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .background(NothingBlack)
                 .padding(4.dp)
         ) {
@@ -322,14 +334,42 @@ private fun ExifTelemetryLoupeCard(shot: CapturedShotEntity) {
 }
 
 @Composable
-private fun ExifMetricCell(label: String, value: String, modifier: Modifier = Modifier) {
+private fun ExifMetricCell(
+    label: String,
+    value: String,
+    sub: String?,
+    modifier: Modifier = Modifier
+) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(8.dp))
             .background(NothingSurface)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 8.dp, vertical = 7.dp)
     ) {
-        Text(text = label, style = MaterialTheme.typography.labelMedium, color = NothingSilver, fontSize = 8.sp)
-        Text(text = value, style = MaterialTheme.typography.labelLarge, color = NothingWhite, fontSize = 10.sp)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = NothingSilver,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge,
+            color = NothingWhite,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (sub != null) {
+            Text(
+                text = sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = NothingSilver,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

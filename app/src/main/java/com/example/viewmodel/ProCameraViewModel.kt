@@ -52,7 +52,7 @@ data class ProCameraUiState(
     val activeMode: AppMode = AppMode.CINE_VIDEO,
     val selectedLens: NothingLens = NothingLens.MAIN_WIDE,
     val fineZoomRatio: Float = 1.0f,
-    val selectedDialTab: ManualDialTab? = ManualDialTab.SHUTTER,
+    val selectedDialTab: ManualDialTab? = null,
 
     // Manual Exposure & Focus
     val isoValue: Int = 0, // 0 = AUTO
@@ -85,7 +85,7 @@ data class ProCameraUiState(
     val videoFps: VideoFps = VideoFps.FPS_24,
     val videoCodec: VideoCodecProfile = VideoCodecProfile.HEVC_ALL_I,
     val anamorphicDeSqueeze: AnamorphicDeSqueeze = AnamorphicDeSqueeze.NONE,
-    val aspectGuide: FrameAspectGuide = FrameAspectGuide.CINE_239,
+    val aspectGuide: FrameAspectGuide = FrameAspectGuide.OFF,
     val aspectMaskOpacity: Float = 0.65f,
 
     // Audio Studio
@@ -97,12 +97,12 @@ data class ProCameraUiState(
     val peakAudioDb: Float = -18f,
 
     // Scopes & Overlays
-    val showHistogramRgb: Boolean = true,
-    val showWaveformScope: Boolean = true,
+    val showHistogramRgb: Boolean = false,
+    val showWaveformScope: Boolean = false,
     val showVectorscope: Boolean = false,
     val showFalseColor: Boolean = false,
-    val zebraThreshold: ZebraThreshold = ZebraThreshold.IRE_95,
-    val focusPeakingColor: FocusPeakingColor = FocusPeakingColor.NOTHING_RED,
+    val zebraThreshold: ZebraThreshold = ZebraThreshold.OFF,
+    val focusPeakingColor: FocusPeakingColor = FocusPeakingColor.OFF,
     val gridOverlayMode: GridOverlayMode = GridOverlayMode.RULE_OF_THIRDS,
     val showHorizonLevel: Boolean = true,
     val showCenterCrosshair: Boolean = true,

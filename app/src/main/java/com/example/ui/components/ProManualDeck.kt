@@ -9,7 +9,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,22 +19,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.FlashlightOn
-import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +35,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AnamorphicDeSqueeze
@@ -57,13 +48,8 @@ import com.example.model.NothingLens
 import com.example.model.PhotoDriveMode
 import com.example.model.PhotoFormat
 import com.example.model.StabilizationMode
-import com.example.model.VideoCodecProfile
-import com.example.model.VideoFps
-import com.example.model.VideoResolution
 import com.example.model.ZebraThreshold
-import com.example.ui.theme.NothingBlack
 import com.example.ui.theme.NothingBorder
-import com.example.ui.theme.NothingObsidian
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingSilver
 import com.example.ui.theme.NothingSurface
@@ -76,6 +62,10 @@ import com.example.viewmodel.ManualDialTab
 import com.example.viewmodel.ProCameraUiState
 import java.util.Locale
 import kotlin.math.abs
+
+// ---------------------------------------------------------------------------------------------
+// Top HUD: status row + quick-settings chips
+// ---------------------------------------------------------------------------------------------
 
 @Composable
 fun TopTelemetryHudBar(
@@ -96,10 +86,10 @@ fun TopTelemetryHudBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(NothingBlack.copy(alpha = 0.88f))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 12.dp)
+            .padding(top = 6.dp, bottom = 8.dp)
     ) {
-        // Row 1: Nothing Phone (2) Hardware Badge + Timecode + Gyro Readout + AE/AF Lock
+        // Row 1: REC / timecode · roll · AE/AF lock
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -107,77 +97,63 @@ fun TopTelemetryHudBar(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(9.dp)
-                        .clip(CircleShape)
-                        .background(if (state.isRecording) NothingRed else ScopeGreen)
+                StatusDot(color = if (state.isRecording) NothingRed else ScopeGreen)
+                Text(
+                    text = state.formattedTimecode,
+                    style = MaterialTheme.typography.displayLarge,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    color = if (state.isRecording) NothingRed else NothingWhite
                 )
                 Text(
-                    text = if (state.isRecording) "REC // ${state.formattedTimecode}" else "NP(2) // ${state.formattedTimecode}",
+                    text = if (state.isRecording) "REC" else state.activeMode.badgeCode,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (state.isRecording) NothingRed else NothingWhite,
-                    fontSize = 11.sp
+                    color = if (state.isRecording) NothingRed else NothingSilver
                 )
             }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 val isLevel = abs(state.rollDegrees) < 1.0f
                 Text(
                     text = String.format(Locale.US, "ROLL %+.1f°", state.rollDegrees),
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (isLevel) ScopeGreen else NothingSilver,
-                    fontSize = 10.sp
+                    color = if (isLevel) ScopeGreen else NothingSilver
                 )
-                Box(
+                Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (state.aeAfLocked) ScopeAmber.copy(alpha = 0.22f) else NothingSurface)
-                        .border(
-                            1.dp,
-                            if (state.aeAfLocked) ScopeAmber else NothingBorder,
-                            RoundedCornerShape(4.dp)
-                        )
+                        .clip(ChipShape)
+                        .background(if (state.aeAfLocked) ScopeAmber.copy(alpha = 0.2f) else NothingSurface)
+                        .border(1.dp, if (state.aeAfLocked) ScopeAmber else NothingBorder, ChipShape)
                         .clickable { onToggleAeAfLock() }
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                        .testTag("toggle_ae_af_lock")
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                        .testTag("toggle_ae_af_lock"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (state.aeAfLocked) Icons.Default.Lock else Icons.Default.LockOpen,
-                            contentDescription = "AE/AF Lock",
-                            tint = if (state.aeAfLocked) ScopeAmber else NothingSilver,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = if (state.aeAfLocked) "AE/AF LOCK" else "AF-C",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (state.aeAfLocked) ScopeAmber else NothingWhite,
-                            fontSize = 9.sp
-                        )
-                    }
+                    Icon(
+                        imageVector = if (state.aeAfLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        contentDescription = "AE/AF Lock",
+                        tint = if (state.aeAfLocked) ScopeAmber else NothingSilver,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = if (state.aeAfLocked) "AE/AF LOCK" else "AF-C",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (state.aeAfLocked) ScopeAmber else NothingWhite
+                    )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Row 2: Scrollable Cinema & Optical Assist Ribbon
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Row 2: scrollable quick settings (fades at the edges while more chips are hidden)
+        FadingScrollRow(modifier = Modifier.fillMaxWidth(), spacing = 6.dp) {
             if (state.activeMode == AppMode.PHOTO_PRO) {
                 HudQuickChip(
                     title = "ФОРМАТ",
@@ -188,7 +164,7 @@ fun TopTelemetryHudBar(
                     onClick = onCycleFormatOrRes
                 )
                 HudQuickChip(
-                    title = "ПРИВОД",
+                    title = "СЕРИЯ",
                     value = state.photoDriveMode.code,
                     active = state.photoDriveMode != PhotoDriveMode.SINGLE,
                     accentColor = ScopeAmber,
@@ -196,8 +172,8 @@ fun TopTelemetryHudBar(
                     onClick = onCycleFpsOrDrive
                 )
                 HudQuickChip(
-                    title = "ND ФИЛЬТР",
-                    value = if (state.ndFilterStops == 0) "OFF" else "ND -${state.ndFilterStops}EV",
+                    title = "ND",
+                    value = if (state.ndFilterStops == 0) "OFF" else "-${state.ndFilterStops} EV",
                     active = state.ndFilterStops > 0,
                     accentColor = NothingRed,
                     tag = "chip_nd_filter",
@@ -205,15 +181,15 @@ fun TopTelemetryHudBar(
                 )
             } else {
                 HudQuickChip(
-                    title = "МАТРИЦА",
+                    title = "РАЗРЕШЕНИЕ",
                     value = state.videoResolution.label,
                     active = true,
-                    accentColor = NothingRed,
+                    accentColor = NothingWhite,
                     tag = "chip_video_res",
                     onClick = onCycleFormatOrRes
                 )
                 HudQuickChip(
-                    title = "ЧАСТОТА",
+                    title = "КАДРЫ/С",
                     value = state.videoFps.label,
                     active = true,
                     accentColor = ScopeGreen,
@@ -221,8 +197,8 @@ fun TopTelemetryHudBar(
                     onClick = onCycleFpsOrDrive
                 )
                 HudQuickChip(
-                    title = "ПОТОК",
-                    value = "${state.videoCodec.bitrateMbps}M ${state.videoCodec.dynamicRange.take(5)}",
+                    title = "КОДЕК",
+                    value = "${state.videoCodec.bitrateMbps}M ${state.videoCodec.dynamicRange.substringBefore(' ')}",
                     active = true,
                     accentColor = ScopeCyan,
                     tag = "chip_video_codec",
@@ -238,7 +214,6 @@ fun TopTelemetryHudBar(
                 tag = "chip_anamorphic",
                 onClick = onCycleAnamorphic
             )
-
             HudQuickChip(
                 title = "РАМКА",
                 value = state.aspectGuide.label,
@@ -247,34 +222,30 @@ fun TopTelemetryHudBar(
                 tag = "chip_aspect_guide",
                 onClick = onCycleAspectGuide
             )
-
             HudQuickChip(
                 title = "ПИКИНГ",
-                value = state.focusPeakingColor.labelRu.take(7),
+                value = state.focusPeakingColor.labelRu.substringBefore(' '),
                 active = state.focusPeakingColor != FocusPeakingColor.OFF,
                 accentColor = if (state.focusPeakingColor == FocusPeakingColor.OFF) NothingSilver else state.focusPeakingColor.color,
                 tag = "chip_focus_peaking",
                 onClick = onCyclePeaking
             )
-
             HudQuickChip(
                 title = "ЗЕБРА",
-                value = state.zebraThreshold.label.take(6),
+                value = state.zebraThreshold.label.substringBefore(' '),
                 active = state.zebraThreshold != ZebraThreshold.OFF,
                 accentColor = ScopeAmber,
                 tag = "chip_zebra",
                 onClick = onCycleZebra
             )
-
             HudQuickChip(
-                title = "FALSE CLR",
-                value = if (state.showFalseColor) "IRE ON" else "OFF",
+                title = "FALSE COLOR",
+                value = if (state.showFalseColor) "ON" else "OFF",
                 active = state.showFalseColor,
                 accentColor = ScopeCyan,
                 tag = "chip_false_color",
                 onClick = onToggleFalseColor
             )
-
             HudQuickChip(
                 title = "СЕТКА",
                 value = state.gridOverlayMode.code,
@@ -283,10 +254,9 @@ fun TopTelemetryHudBar(
                 tag = "chip_grid_mode",
                 onClick = onCycleGrid
             )
-
             HudQuickChip(
                 title = "ГОРИЗОНТ",
-                value = if (state.showHorizonLevel) "GYRO ON" else "OFF",
+                value = if (state.showHorizonLevel) "ON" else "OFF",
                 active = state.showHorizonLevel,
                 accentColor = ScopeGreen,
                 tag = "chip_horizon_gyro",
@@ -307,41 +277,228 @@ private fun HudQuickChip(
 ) {
     Column(
         modifier = Modifier
-            .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (active) NothingSurfaceHigh else NothingObsidian)
+            .clip(ChipShape)
+            .background(if (active) NothingSurfaceHigh else NothingSurface)
             .border(
                 width = 1.dp,
-                color = if (active) accentColor.copy(alpha = 0.7f) else NothingBorder,
-                shape = RoundedCornerShape(6.dp)
+                color = if (active) accentColor.copy(alpha = 0.6f) else NothingBorder.copy(alpha = 0.6f),
+                shape = ChipShape
             )
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 10.dp, vertical = 7.dp)
             .semantics(mergeDescendants = true) {}
             .testTag(tag),
         horizontalAlignment = Alignment.Start
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = NothingSilver,
-            fontSize = 8.sp
+            maxLines = 1
         )
+        Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.labelLarge,
             color = if (active) accentColor else NothingWhite,
-            fontSize = 11.sp
+            maxLines = 1
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Control deck: lens turret, parameter strip, dial drawer
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+fun LensTurretRow(
+    state: ProCameraUiState,
+    onSelectLens: (NothingLens) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val rearLenses = NothingLens.entries.filter { !it.isFront }.sortedBy { it.zoomRatio }
+    val frontLens = NothingLens.entries.firstOrNull { it.isFront }
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            rearLenses.forEach { lens ->
+                val selected = state.selectedLens == lens
+                Box(
+                    modifier = Modifier
+                        .clip(PillShape)
+                        .background(if (selected) NothingRed else NothingSurface)
+                        .border(1.dp, if (selected) NothingRed else NothingBorder, PillShape)
+                        .clickable { onSelectLens(lens) }
+                        .padding(horizontal = 11.dp, vertical = 7.dp)
+                        .testTag("lens_btn_${lens.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = lens.focalLabel,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = NothingWhite
+                    )
+                }
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = String.format(Locale.US, "%.1f×", state.fineZoomRatio),
+                style = MaterialTheme.typography.labelLarge,
+                color = ScopeAmber
+            )
+            if (frontLens != null) {
+                val selected = state.selectedLens == frontLens
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) NothingWhite else NothingSurface)
+                        .border(1.dp, if (selected) NothingWhite else NothingBorder, CircleShape)
+                        .clickable { onSelectLens(frontLens) }
+                        .testTag("lens_btn_${frontLens.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Cameraswitch,
+                        contentDescription = "Фронтальная камера",
+                        tint = if (selected) androidx.compose.ui.graphics.Color.Black else NothingWhite,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ParameterStrip(
+    state: ProCameraUiState,
+    onToggleDialTab: (ManualDialTab) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isVideo = state.activeMode == AppMode.CINE_VIDEO
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        ParameterDialTile(
+            label = "ISO",
+            value = if (state.isoValue > 0) state.isoValue.toString() else "AUTO",
+            isManual = state.isoValue > 0,
+            isSelected = state.selectedDialTab == ManualDialTab.ISO,
+            tag = "dial_tab_iso",
+            onClick = { onToggleDialTab(ManualDialTab.ISO) },
+            modifier = Modifier.weight(1f)
+        )
+        ParameterDialTile(
+            label = if (isVideo && state.useShutterAngleInVideo) "УГОЛ" else "ЗАТВОР",
+            value = state.shutterDisplayLabel,
+            isManual = state.shutterDenominator > 0,
+            isSelected = state.selectedDialTab == ManualDialTab.SHUTTER,
+            tag = "dial_tab_shutter",
+            onClick = { onToggleDialTab(ManualDialTab.SHUTTER) },
+            modifier = Modifier.weight(1f)
+        )
+        ParameterDialTile(
+            label = "ФОКУС",
+            value = state.focusDisplayLabel,
+            isManual = state.manualFocusDiopters != null,
+            isSelected = state.selectedDialTab == ManualDialTab.FOCUS,
+            tag = "dial_tab_focus",
+            onClick = { onToggleDialTab(ManualDialTab.FOCUS) },
+            modifier = Modifier.weight(1f)
+        )
+        ParameterDialTile(
+            label = "ББ",
+            value = state.wbDisplayLabel,
+            isManual = state.wbKelvin > 0,
+            isSelected = state.selectedDialTab == ManualDialTab.WB,
+            tag = "dial_tab_wb",
+            onClick = { onToggleDialTab(ManualDialTab.WB) },
+            modifier = Modifier.weight(1f)
+        )
+        ParameterDialTile(
+            label = "EV",
+            value = String.format(Locale.US, "%+.1f", state.evCompensation),
+            isManual = abs(state.evCompensation) > 0.05f,
+            isSelected = state.selectedDialTab == ManualDialTab.EV,
+            tag = "dial_tab_ev",
+            onClick = { onToggleDialTab(ManualDialTab.EV) },
+            modifier = Modifier.weight(1f)
+        )
+        if (isVideo) {
+            ParameterDialTile(
+                label = "ЗВУК",
+                value = String.format(Locale.US, "%+.0fdB", state.audioGainDb),
+                isManual = abs(state.audioGainDb) > 0.05f,
+                isSelected = state.selectedDialTab == ManualDialTab.AUDIO,
+                tag = "dial_tab_audio",
+                onClick = { onToggleDialTab(ManualDialTab.AUDIO) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParameterDialTile(
+    label: String,
+    value: String,
+    isManual: Boolean,
+    isSelected: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val borderColor = when {
+        isSelected -> NothingRed
+        isManual -> ScopeAmber.copy(alpha = 0.6f)
+        else -> NothingBorder.copy(alpha = 0.5f)
+    }
+    Column(
+        modifier = modifier
+            .clip(ChipShape)
+            .background(if (isSelected) NothingSurfaceHigh else NothingSurface)
+            .border(1.dp, borderColor, ChipShape)
+            .clickable { onClick() }
+            .padding(horizontal = 4.dp, vertical = 8.dp)
+            .semantics(mergeDescendants = true) {}
+            .testTag(tag),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isSelected) NothingWhite else NothingSilver,
+            maxLines = 1
+        )
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (isManual) ScopeAmber else NothingWhite,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip
         )
     }
 }
 
 @Composable
-fun LensAndManualControlDeck(
+fun ManualDialDrawer(
     state: ProCameraUiState,
-    onSelectLens: (NothingLens) -> Unit,
-    onFineZoomChange: (Float) -> Unit,
-    onToggleDialTab: (ManualDialTab) -> Unit,
     onIsoChange: (Int) -> Unit,
     onShutterDenomChange: (Int) -> Unit,
     onShutterAngleChange: (Float) -> Unit,
@@ -359,234 +516,62 @@ fun LensAndManualControlDeck(
     onAudioDirectionChange: (AudioDirectionMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    AnimatedVisibility(
+        visible = state.selectedDialTab != null,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
         modifier = modifier
-            .fillMaxWidth()
-            .background(NothingBlack.copy(alpha = 0.92f))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
-        // 1. Expandable Mechanical Dial Drawer for active parameter
-        AnimatedVisibility(
-            visible = state.selectedDialTab != null,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut()
-        ) {
-            state.selectedDialTab?.let { tab ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(NothingObsidian)
-                        .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
-                        .padding(10.dp)
-                ) {
-                    when (tab) {
-                        ManualDialTab.ISO -> IsoDialDrawer(
-                            currentIso = state.isoValue,
-                            onSelectIso = onIsoChange
-                        )
-                        ManualDialTab.SHUTTER -> ShutterDialDrawer(
-                            state = state,
-                            onSelectDenom = onShutterDenomChange,
-                            onSelectAngle = onShutterAngleChange,
-                            onToggleAngleMode = onToggleShutterAngleMode
-                        )
-                        ManualDialTab.FOCUS -> FocusAndPullerDrawer(
-                            state = state,
-                            onManualFocusChange = onManualFocusChange,
-                            onTriggerPull = onTriggerFocusPull,
-                            onSavePoint = onSaveFocusPullPoint,
-                            onSpeedChange = onFocusPullSpeedChange
-                        )
-                        ManualDialTab.WB -> WhiteBalanceDrawer(
-                            wbKelvin = state.wbKelvin,
-                            wbTint = state.wbTint,
-                            onWbChange = onWbChange
-                        )
-                        ManualDialTab.EV -> ExposureAndMeteringDrawer(
-                            evValue = state.evCompensation,
-                            meteringMode = state.meteringMode,
-                            stabilizationMode = state.stabilizationMode,
-                            onEvChange = onEvChange,
-                            onMeteringChange = onMeteringChange,
-                            onStabilizationChange = onStabilizationChange
-                        )
-                        ManualDialTab.AUDIO -> AudioStudioDrawer(
-                            gainDb = state.audioGainDb,
-                            windCut = state.windCutEnabled,
-                            direction = state.audioDirection,
-                            onGainChange = onAudioGainChange,
-                            onToggleWindCut = onToggleWindCut,
-                            onDirectionChange = onAudioDirectionChange
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. Nothing Phone (2) Multi-Lens Turret Selector + Fine Zoom Readout
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                NothingLens.entries.forEach { lens ->
-                    val selected = state.selectedLens == lens
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(if (selected) NothingRed else NothingSurface)
-                            .border(
-                                1.dp,
-                                if (selected) NothingRed else NothingBorder,
-                                RoundedCornerShape(18.dp)
-                            )
-                            .clickable { onSelectLens(lens) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("lens_btn_${lens.id}"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = lens.focalLabel,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = NothingWhite,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-            }
-
-            Text(
-                text = String.format(Locale.US, "%.1f× ZOOM", state.fineZoomRatio),
-                style = MaterialTheme.typography.labelLarge,
-                color = ScopeAmber,
-                fontSize = 11.sp
-            )
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // 3. 6-Channel Pro Parameter Strip (ISO | SHTR | MF | WB | EV | AUD)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            ParameterDialButton(
-                label = "ISO",
-                value = state.isoDisplayLabel,
-                isManual = state.isoValue > 0,
-                isSelected = state.selectedDialTab == ManualDialTab.ISO,
-                tag = "dial_tab_iso",
-                onClick = { onToggleDialTab(ManualDialTab.ISO) }
-            )
-            ParameterDialButton(
-                label = if (state.activeMode == AppMode.CINE_VIDEO && state.useShutterAngleInVideo) "SHUTTER °" else "SHUTTER",
-                value = state.shutterDisplayLabel,
-                isManual = state.shutterDenominator > 0,
-                isSelected = state.selectedDialTab == ManualDialTab.SHUTTER,
-                tag = "dial_tab_shutter",
-                onClick = { onToggleDialTab(ManualDialTab.SHUTTER) }
-            )
-            ParameterDialButton(
-                label = "ФОКУС MF",
-                value = state.focusDisplayLabel,
-                isManual = state.manualFocusDiopters != null,
-                isSelected = state.selectedDialTab == ManualDialTab.FOCUS,
-                tag = "dial_tab_focus",
-                onClick = { onToggleDialTab(ManualDialTab.FOCUS) }
-            )
-            ParameterDialButton(
-                label = "ББ KELVIN",
-                value = state.wbDisplayLabel,
-                isManual = state.wbKelvin > 0,
-                isSelected = state.selectedDialTab == ManualDialTab.WB,
-                tag = "dial_tab_wb",
-                onClick = { onToggleDialTab(ManualDialTab.WB) }
-            )
-            ParameterDialButton(
-                label = "ЭКСПО EV",
-                value = String.format(Locale.US, "%+.1f", state.evCompensation),
-                isManual = abs(state.evCompensation) > 0.05f,
-                isSelected = state.selectedDialTab == ManualDialTab.EV,
-                tag = "dial_tab_ev",
-                onClick = { onToggleDialTab(ManualDialTab.EV) }
-            )
-            ParameterDialButton(
-                label = "АУДИО 24B",
-                value = String.format(Locale.US, "%+.0fdB %s", state.audioGainDb, state.audioDirection.code),
-                isManual = state.windCutEnabled,
-                isSelected = state.selectedDialTab == ManualDialTab.AUDIO,
-                tag = "dial_tab_audio",
-                onClick = { onToggleDialTab(ManualDialTab.AUDIO) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ParameterDialButton(
-    label: String,
-    value: String,
-    isManual: Boolean,
-    isSelected: Boolean,
-    tag: String,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .width(78.dp)
-            .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isSelected) NothingSurfaceHigh else NothingSurface)
-            .border(
-                width = 1.dp,
-                color = when {
-                    isSelected -> NothingRed
-                    isManual -> ScopeAmber.copy(alpha = 0.65f)
-                    else -> NothingBorder
-                },
-                shape = RoundedCornerShape(8.dp)
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .semantics(mergeDescendants = true) {}
-            .testTag(tag),
-        horizontalAlignment = Alignment.Start
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = NothingSilver,
-                fontSize = 8.sp
-            )
-            Box(
+        val tab = state.selectedDialTab
+        if (tab != null) {
+            NothingCard(
                 modifier = Modifier
-                    .size(5.dp)
-                    .clip(CircleShape)
-                    .background(if (isManual) ScopeAmber else ScopeGreen)
-            )
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)
+            ) {
+                when (tab) {
+                    ManualDialTab.ISO -> IsoDialDrawer(
+                        currentIso = state.isoValue,
+                        onSelectIso = onIsoChange
+                    )
+                    ManualDialTab.SHUTTER -> ShutterDialDrawer(
+                        state = state,
+                        onSelectDenom = onShutterDenomChange,
+                        onSelectAngle = onShutterAngleChange,
+                        onToggleAngleMode = onToggleShutterAngleMode
+                    )
+                    ManualDialTab.FOCUS -> FocusAndPullerDrawer(
+                        state = state,
+                        onManualFocusChange = onManualFocusChange,
+                        onTriggerPull = onTriggerFocusPull,
+                        onSavePoint = onSaveFocusPullPoint,
+                        onSpeedChange = onFocusPullSpeedChange
+                    )
+                    ManualDialTab.WB -> WhiteBalanceDrawer(
+                        wbKelvin = state.wbKelvin,
+                        wbTint = state.wbTint,
+                        onWbChange = onWbChange
+                    )
+                    ManualDialTab.EV -> ExposureAndMeteringDrawer(
+                        evValue = state.evCompensation,
+                        meteringMode = state.meteringMode,
+                        stabilizationMode = state.stabilizationMode,
+                        onEvChange = onEvChange,
+                        onMeteringChange = onMeteringChange,
+                        onStabilizationChange = onStabilizationChange
+                    )
+                    ManualDialTab.AUDIO -> AudioStudioDrawer(
+                        gainDb = state.audioGainDb,
+                        windCut = state.windCutEnabled,
+                        direction = state.audioDirection,
+                        onGainChange = onAudioGainChange,
+                        onToggleWindCut = onToggleWindCut,
+                        onDirectionChange = onAudioDirectionChange
+                    )
+                }
+            }
         }
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (isSelected) NothingWhite else if (isManual) ScopeAmber else NothingWhite,
-            fontSize = 12.sp
-        )
     }
 }
 
@@ -597,51 +582,25 @@ private fun IsoDialDrawer(
 ) {
     val isoStops = listOf(0, 50, 100, 160, 200, 400, 800, 1600, 3200, 6400, 12800)
     Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "ЧУВСТВИТЕЛЬНОСТЬ СЕНСОРА SONY IMX890",
-                style = MaterialTheme.typography.labelMedium,
-                color = NothingSilver
-            )
-            Text(
-                text = if (currentIso == 800 || currentIso == 100) "DUAL NATIVE ISO БАЗА" else "РУЧНОЙ ISO",
-                style = MaterialTheme.typography.labelMedium,
-                color = ScopeGreen
-            )
-        }
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            isoStops.forEach { iso ->
-                val selected = currentIso == iso
-                val label = if (iso == 0) "AUTO" else iso.toString()
-                Box(
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selected) NothingRed else NothingSurface)
-                        .border(1.dp, if (selected) NothingRed else NothingBorder, RoundedCornerShape(6.dp))
-                        .clickable { onSelectIso(iso) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("iso_opt_$iso"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = NothingWhite
-                    )
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(6.dp))
+        SectionLabel(
+            text = "Чувствительность ISO · Sony IMX890",
+            trailing = when (currentIso) {
+                0 -> "AUTO"
+                100, 800 -> "DUAL NATIVE"
+                else -> "РУЧНОЙ"
+            },
+            trailingColor = ScopeGreen
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        ChoiceChipRow(
+            items = isoStops,
+            selected = currentIso,
+            label = { if (it == 0) "AUTO" else it.toString() },
+            onSelect = onSelectIso,
+            tag = { "iso_opt_$it" },
+            compact = true
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         TactileRulerTickStrip(activeFraction = isoStops.indexOf(currentIso).coerceAtLeast(0) / (isoStops.size - 1f))
     }
 }
@@ -655,6 +614,8 @@ private fun ShutterDialDrawer(
 ) {
     val shutterDenoms = listOf(0, 8000, 4000, 2000, 1000, 500, 250, 125, 60, 50, 48, 30, 15, 4, 1)
     val shutterAngles = listOf(45f, 90f, 144f, 172.8f, 180.0f, 270f, 360f)
+    val isVideo = state.activeMode == AppMode.CINE_VIDEO
+    val angleMode = isVideo && state.useShutterAngleInVideo
 
     Column {
         Row(
@@ -662,98 +623,55 @@ private fun ShutterDialDrawer(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = if (state.useShutterAngleInVideo && state.activeMode == AppMode.CINE_VIDEO)
-                    "КИНО-УГОЛ ЗАТВОРА (ПРАВИЛО 180°)"
-                else
-                    "ВЫДЕРЖКА ЭЛЕКТРОННОГО ЗАТВОРА",
-                style = MaterialTheme.typography.labelMedium,
-                color = NothingSilver
+            SectionLabel(
+                text = if (angleMode) "Угол затвора · правило 180°" else "Выдержка затвора",
+                modifier = Modifier.weight(1f)
             )
-            if (state.activeMode == AppMode.CINE_VIDEO) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(NothingSurfaceHigh)
-                        .border(1.dp, ScopeAmber, RoundedCornerShape(4.dp))
-                        .clickable { onToggleAngleMode() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .testTag("toggle_shutter_angle_mode")
-                ) {
-                    Text(
-                        text = if (state.useShutterAngleInVideo) "УГОЛ ° -> СЕК" else "СЕК -> УГОЛ °",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ScopeAmber,
-                        fontSize = 9.sp
-                    )
-                }
+            if (isVideo) {
+                Spacer(modifier = Modifier.width(8.dp))
+                ChoiceChip(
+                    label = if (state.useShutterAngleInVideo) "ГРАДУСЫ" else "СЕКУНДЫ",
+                    selected = true,
+                    accent = ScopeAmber,
+                    onClick = onToggleAngleMode,
+                    tag = "toggle_shutter_angle_mode",
+                    compact = true
+                )
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        if (state.activeMode == AppMode.CINE_VIDEO && state.useShutterAngleInVideo) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                shutterAngles.forEach { angle ->
-                    val selected = abs(state.shutterAngleDeg - angle) < 1f
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (selected) NothingRed else NothingSurface)
-                            .border(1.dp, if (selected) NothingRed else NothingBorder, RoundedCornerShape(6.dp))
-                            .clickable { onSelectAngle(angle) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("shutter_angle_${angle.toInt()}"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "${angle}°",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = NothingWhite
-                        )
-                    }
-                }
-            }
+        Spacer(modifier = Modifier.height(8.dp))
+        if (angleMode) {
+            ChoiceChipRow(
+                items = shutterAngles,
+                selected = shutterAngles.firstOrNull { abs(state.shutterAngleDeg - it) < 1f } ?: -1f,
+                label = { String.format(Locale.US, "%.1f°", it) },
+                onSelect = onSelectAngle,
+                tag = { "shutter_angle_${it.toInt()}" },
+                compact = true
+            )
         } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                shutterDenoms.forEach { denom ->
-                    val selected = state.shutterDenominator == denom
-                    val label = when (denom) {
+            ChoiceChipRow(
+                items = shutterDenoms,
+                selected = state.shutterDenominator,
+                label = { denom ->
+                    when (denom) {
                         0 -> "AUTO"
                         1 -> "1.0\""
                         else -> "1/$denom"
                     }
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (selected) NothingRed else NothingSurface)
-                            .border(1.dp, if (selected) NothingRed else NothingBorder, RoundedCornerShape(6.dp))
-                            .clickable { onSelectDenom(denom) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("shutter_denom_$denom"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = NothingWhite
-                        )
-                    }
-                }
-            }
+                },
+                onSelect = onSelectDenom,
+                tag = { "shutter_denom_$it" },
+                compact = true
+            )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        TactileRulerTickStrip(activeFraction = 0.5f)
+        Spacer(modifier = Modifier.height(8.dp))
+        val fraction = if (angleMode) {
+            (state.shutterAngleDeg / 360f).coerceIn(0f, 1f)
+        } else {
+            shutterDenoms.indexOf(state.shutterDenominator).coerceAtLeast(0) / (shutterDenoms.size - 1f)
+        }
+        TactileRulerTickStrip(activeFraction = fraction)
     }
 }
 
@@ -765,101 +683,85 @@ private fun FocusAndPullerDrawer(
     onSavePoint: (String) -> Unit,
     onSpeedChange: (Long) -> Unit
 ) {
+    val isManual = state.manualFocusDiopters != null
     Column {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "РУЧНОЙ ФОКУС И МОТОРИЗОВАННЫЙ ПУЛЛЕР A/B/C",
-                style = MaterialTheme.typography.labelMedium,
-                color = NothingSilver
-            )
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (state.manualFocusDiopters == null) ScopeGreen.copy(alpha = 0.2f) else NothingSurface)
-                    .border(
-                        1.dp,
-                        if (state.manualFocusDiopters == null) ScopeGreen else NothingBorder,
-                        RoundedCornerShape(4.dp)
-                    )
-                    .clickable {
-                        onManualFocusChange(if (state.manualFocusDiopters == null) 2.0f else null)
-                    }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("btn_toggle_af_mf")
-            ) {
-                Text(
-                    text = if (state.manualFocusDiopters == null) "AF-C АКТИВЕН (НАЖМИ ДЛЯ MF)" else "ВЕРНУТЬ AF-C",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (state.manualFocusDiopters == null) ScopeGreen else NothingWhite,
-                    fontSize = 9.sp
+            SectionLabel(text = "Фокус", modifier = Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ChoiceChip(
+                    label = "AF-C",
+                    selected = !isManual,
+                    accent = ScopeGreen,
+                    onClick = { if (isManual) onManualFocusChange(null) },
+                    compact = true
+                )
+                ChoiceChip(
+                    label = "MF",
+                    selected = isManual,
+                    accent = ScopeAmber,
+                    onClick = { if (!isManual) onManualFocusChange(2.0f) },
+                    tag = "btn_toggle_af_mf",
+                    compact = true
                 )
             }
         }
-
-        Slider(
+        Spacer(modifier = Modifier.height(6.dp))
+        LabelledSlider(
+            label = "Дистанция",
+            valueText = state.focusDisplayLabel,
             value = state.manualFocusDiopters ?: 2.0f,
             onValueChange = { onManualFocusChange(it) },
             valueRange = 0.0f..10.0f,
-            colors = SliderDefaults.colors(
-                thumbColor = NothingRed,
-                activeTrackColor = ScopeAmber,
-                inactiveTrackColor = NothingSurfaceHigh
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("slider_manual_focus")
+            accent = ScopeAmber,
+            tag = "slider_manual_focus"
         )
 
-        // Focus Puller A / B / C Programmable Buttons
+        Spacer(modifier = Modifier.height(6.dp))
+        SectionLabel(text = "Перевод фокуса A / B / C")
+        Spacer(modifier = Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             state.focusPullPoints.forEach { pt ->
                 val isSlotActive = state.activeFocusPullSlot == pt.slot
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isSlotActive) NothingRed.copy(alpha = 0.28f) else NothingSurface)
-                        .border(
-                            1.dp,
-                            if (isSlotActive) NothingRed else NothingBorder,
-                            RoundedCornerShape(6.dp)
-                        )
-                        .padding(6.dp)
+                        .clip(ChipShape)
+                        .background(if (isSlotActive) NothingRed.copy(alpha = 0.22f) else NothingSurface)
+                        .border(1.dp, if (isSlotActive) NothingRed else NothingBorder, ChipShape)
+                        .clickable { onTriggerPull(pt.slot) }
+                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                        .testTag("focus_pull_slot_${pt.slot}")
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onTriggerPull(pt.slot) }
-                            .testTag("focus_pull_slot_${pt.slot}"),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "ПУЛ [${pt.slot}]",
+                            text = pt.slot,
                             style = MaterialTheme.typography.labelLarge,
                             color = ScopeAmber
                         )
                         Text(
                             text = pt.labelMeters,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             color = NothingWhite,
-                            fontSize = 10.sp
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "ЗАПИСАТЬ ТЕКУЩ.",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = "ЗАПИСАТЬ",
+                        style = MaterialTheme.typography.labelSmall,
                         color = ScopeCyan,
-                        fontSize = 8.sp,
                         modifier = Modifier
                             .clickable { onSavePoint(pt.slot) }
                             .padding(vertical = 2.dp)
@@ -869,30 +771,20 @@ private fun FocusAndPullerDrawer(
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            listOf(600L to "0.6с БЫСТРО", 1400L to "1.4с КИНО", 2800L to "2.8с ПЛАВНО").forEach { (ms, lbl) ->
-                val selected = state.focusPullDurationMs == ms
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (selected) NothingSurfaceHigh else NothingObsidian)
-                        .border(1.dp, if (selected) ScopeCyan else NothingBorder, RoundedCornerShape(4.dp))
-                        .clickable { onSpeedChange(ms) }
-                        .padding(vertical = 4.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = lbl,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) ScopeCyan else NothingSilver,
-                        fontSize = 9.sp
-                    )
-                }
+            listOf(600L to "0.6с", 1400L to "1.4с КИНО", 2800L to "2.8с").forEach { (ms, lbl) ->
+                ChoiceChip(
+                    label = lbl,
+                    selected = state.focusPullDurationMs == ms,
+                    accent = ScopeCyan,
+                    onClick = { onSpeedChange(ms) },
+                    modifier = Modifier.weight(1f),
+                    compact = true
+                )
             }
         }
     }
@@ -905,7 +797,7 @@ private fun WhiteBalanceDrawer(
     onWbChange: (Int, Int) -> Unit
 ) {
     val presets = listOf(
-        0 to "AWB АВТО",
+        0 to "AWB",
         3200 to "3200K ЛАМПА",
         4300 to "4300K НЕОН",
         5600 to "5600K ДЕНЬ",
@@ -913,72 +805,33 @@ private fun WhiteBalanceDrawer(
         7500 to "7500K ТЕНЬ"
     )
     Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            presets.forEach { (k, label) ->
-                val selected = wbKelvin == k
-                Box(
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selected) NothingRed else NothingSurface)
-                        .border(1.dp, if (selected) NothingRed else NothingBorder, RoundedCornerShape(6.dp))
-                        .clickable { onWbChange(k, wbTint) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("wb_preset_$k"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(text = label, style = MaterialTheme.typography.labelMedium, color = NothingWhite)
-                }
-            }
-        }
+        SectionLabel(text = "Баланс белого")
+        Spacer(modifier = Modifier.height(8.dp))
+        ChoiceChipRow(
+            items = presets,
+            selected = presets.firstOrNull { it.first == wbKelvin } ?: (-1 to ""),
+            label = { it.second },
+            onSelect = { onWbChange(it.first, wbTint) },
+            tag = { "wb_preset_${it.first}" },
+            compact = true
+        )
         Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "ТЕМП: ${if (wbKelvin == 0) 5600 else wbKelvin}K",
-                style = MaterialTheme.typography.labelMedium,
-                color = ScopeAmber,
-                modifier = Modifier.width(86.dp)
-            )
-            Slider(
-                value = (if (wbKelvin == 0) 5600 else wbKelvin).toFloat(),
-                onValueChange = { onWbChange((it.toInt() / 100) * 100, wbTint) },
-                valueRange = 2500f..10000f,
-                colors = SliderDefaults.colors(
-                    thumbColor = ScopeAmber,
-                    activeTrackColor = ScopeAmber
-                ),
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "ОТТЕНОК: ${String.format(Locale.US, "%+d", wbTint)}",
-                style = MaterialTheme.typography.labelMedium,
-                color = ScopeGreen,
-                modifier = Modifier.width(86.dp)
-            )
-            Slider(
-                value = wbTint.toFloat(),
-                onValueChange = { onWbChange(wbKelvin, it.toInt()) },
-                valueRange = -50f..50f,
-                colors = SliderDefaults.colors(
-                    thumbColor = ScopeGreen,
-                    activeTrackColor = ScopeGreen
-                ),
-                modifier = Modifier.weight(1f)
-            )
-        }
+        LabelledSlider(
+            label = "Температура",
+            valueText = "${if (wbKelvin == 0) 5600 else wbKelvin}K",
+            value = (if (wbKelvin == 0) 5600 else wbKelvin).toFloat(),
+            onValueChange = { onWbChange((it.toInt() / 100) * 100, wbTint) },
+            valueRange = 2500f..10000f,
+            accent = ScopeAmber
+        )
+        LabelledSlider(
+            label = "Оттенок",
+            valueText = String.format(Locale.US, "%+d", wbTint),
+            value = wbTint.toFloat(),
+            onValueChange = { onWbChange(wbKelvin, it.toInt()) },
+            valueRange = -50f..50f,
+            accent = ScopeGreen
+        )
     }
 }
 
@@ -992,82 +845,38 @@ private fun ExposureAndMeteringDrawer(
     onStabilizationChange: (StabilizationMode) -> Unit
 ) {
     Column {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = String.format(Locale.US, "EV %+.1f", evValue),
-                style = MaterialTheme.typography.labelLarge,
-                color = ScopeAmber,
-                modifier = Modifier.width(68.dp)
-            )
-            Slider(
-                value = evValue,
-                onValueChange = onEvChange,
-                valueRange = -3.0f..3.0f,
-                steps = 19,
-                colors = SliderDefaults.colors(
-                    thumbColor = NothingRed,
-                    activeTrackColor = ScopeAmber
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("slider_ev_compensation")
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            MeteringMode.entries.forEach { m ->
-                val sel = meteringMode == m
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (sel) NothingSurfaceHigh else NothingSurface)
-                        .border(1.dp, if (sel) ScopeCyan else NothingBorder, RoundedCornerShape(6.dp))
-                        .clickable { onMeteringChange(m) }
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = m.labelRu,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (sel) ScopeCyan else NothingSilver
-                    )
-                }
-            }
-        }
+        LabelledSlider(
+            label = "Экспокоррекция",
+            valueText = String.format(Locale.US, "EV %+.1f", evValue),
+            value = evValue,
+            onValueChange = onEvChange,
+            valueRange = -3.0f..3.0f,
+            steps = 59,
+            accent = ScopeAmber,
+            tag = "slider_ev_compensation"
+        )
         Spacer(modifier = Modifier.height(6.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            StabilizationMode.entries.forEach { stab ->
-                val sel = stabilizationMode == stab
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (sel) NothingSurfaceHigh else NothingSurface)
-                        .border(1.dp, if (sel) ScopeGreen else NothingBorder, RoundedCornerShape(6.dp))
-                        .clickable { onStabilizationChange(stab) }
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = stab.labelRu,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (sel) ScopeGreen else NothingSilver
-                    )
-                }
-            }
-        }
+        SectionLabel(text = "Замер экспозиции")
+        Spacer(modifier = Modifier.height(6.dp))
+        ChoiceChipRow(
+            items = MeteringMode.entries,
+            selected = meteringMode,
+            label = { it.labelRu },
+            onSelect = onMeteringChange,
+            accent = ScopeCyan,
+            compact = true
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SectionLabel(text = "Стабилизация")
+        Spacer(modifier = Modifier.height(6.dp))
+        ChoiceChipRow(
+            items = StabilizationMode.entries,
+            selected = stabilizationMode,
+            label = { it.labelRu },
+            onSelect = onStabilizationChange,
+            accent = ScopeGreen,
+            compact = true
+        )
     }
 }
 
@@ -1081,68 +890,34 @@ private fun AudioStudioDrawer(
     onDirectionChange: (AudioDirectionMode) -> Unit
 ) {
     Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = String.format(Locale.US, "УСИЛЕНИЕ МИКРОФОНОВ: %+.1f dB", gainDb),
-                style = MaterialTheme.typography.labelMedium,
-                color = ScopeGreen
-            )
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (windCut) ScopeGreen.copy(alpha = 0.2f) else NothingSurface)
-                    .border(1.dp, if (windCut) ScopeGreen else NothingBorder, RoundedCornerShape(4.dp))
-                    .clickable { onToggleWindCut() }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("btn_toggle_wind_cut")
-            ) {
-                Text(
-                    text = if (windCut) "80Hz HPF ВЕТРОЗАЩИТА ON" else "80Hz HPF OFF",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (windCut) ScopeGreen else NothingSilver,
-                    fontSize = 9.sp
-                )
-            }
-        }
-        Slider(
+        LabelledSlider(
+            label = "Усиление микрофона",
+            valueText = String.format(Locale.US, "%+.1f dB", gainDb),
             value = gainDb,
             onValueChange = onGainChange,
             valueRange = -12f..12f,
-            colors = SliderDefaults.colors(
-                thumbColor = ScopeGreen,
-                activeTrackColor = ScopeGreen
-            ),
-            modifier = Modifier.fillMaxWidth()
+            accent = ScopeGreen
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            AudioDirectionMode.entries.forEach { dir ->
-                val sel = direction == dir
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (sel) NothingSurfaceHigh else NothingSurface)
-                        .border(1.dp, if (sel) ScopeAmber else NothingBorder, RoundedCornerShape(6.dp))
-                        .clickable { onDirectionChange(dir) }
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = dir.labelRu,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (sel) ScopeAmber else NothingSilver
-                    )
-                }
-            }
-        }
+        Spacer(modifier = Modifier.height(4.dp))
+        ChoiceChip(
+            label = if (windCut) "ВЕТРОЗАЩИТА 80 Hz · ВКЛ" else "ВЕТРОЗАЩИТА 80 Hz · ВЫКЛ",
+            selected = windCut,
+            accent = ScopeGreen,
+            onClick = onToggleWindCut,
+            tag = "btn_toggle_wind_cut",
+            compact = true
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SectionLabel(text = "Направленность микрофонов")
+        Spacer(modifier = Modifier.height(6.dp))
+        ChoiceChipRow(
+            items = AudioDirectionMode.entries,
+            selected = direction,
+            label = { it.labelRu },
+            onSelect = onDirectionChange,
+            accent = ScopeAmber,
+            compact = true
+        )
     }
 }
 

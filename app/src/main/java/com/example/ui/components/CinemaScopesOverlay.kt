@@ -5,11 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,8 +32,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.model.FocusPeakingColor
 import com.example.model.FrameAspectGuide
 import com.example.model.GridOverlayMode
@@ -50,7 +49,6 @@ import com.example.ui.theme.ScopeAmber
 import com.example.ui.theme.ScopeBlue
 import com.example.ui.theme.ScopeCyan
 import com.example.ui.theme.ScopeGreen
-import com.example.ui.theme.ScopeMagenta
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.cos
@@ -212,14 +210,8 @@ private fun DrawScope.drawFocusPeakingOverlay(
                 val cy = (r + 0.5f) * cellH
                 drawCircle(
                     color = color.copy(alpha = (strength * 0.9f).coerceIn(0.3f, 0.95f)),
-                    radius = (strength * 3.5f).dp.toPx(),
+                    radius = (strength * 2.4f).dp.toPx(),
                     center = Offset(cx, cy)
-                )
-                drawLine(
-                    color = color.copy(alpha = 0.85f),
-                    start = Offset(cx - cellW * 0.35f, cy),
-                    end = Offset(cx + cellW * 0.35f, cy),
-                    strokeWidth = 1.5.dp.toPx()
                 )
             }
         }
@@ -276,7 +268,7 @@ private fun DrawScope.drawAspectMaskAndSafeZones(
 }
 
 private fun DrawScope.drawCompositionGrid(mode: GridOverlayMode, w: Float, h: Float) {
-    val lineColor = NothingWhite.copy(alpha = 0.28f)
+    val lineColor = NothingWhite.copy(alpha = 0.22f)
     val strokePx = 1.dp.toPx()
 
     when (mode) {
@@ -391,56 +383,95 @@ private fun DrawScope.drawFocusReticle(cx: Float, cy: Float, locked: Boolean) {
     drawCircle(color, radius = 2.5.dp.toPx(), center = Offset(left + half, top + half))
 }
 
+// ---------------------------------------------------------------------------------------------
+// Floating scopes dock (top of the viewfinder)
+// ---------------------------------------------------------------------------------------------
+
 @Composable
 fun FloatingScopesHudDock(
     telemetry: LiveScopeTelemetry,
     showHistogram: Boolean,
     showWaveform: Boolean,
     showVectorscope: Boolean,
+    showAudio: Boolean,
     leftAudioDb: Float,
     rightAudioDb: Float,
     peakAudioDb: Float,
-    onCycleScopeVisibility: () -> Unit,
+    onToggleHistogram: () -> Unit,
+    onToggleWaveform: () -> Unit,
+    onToggleVectorscope: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    if (!showHistogram && !showWaveform && !showVectorscope && !showAudio) return
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.Top
     ) {
-        // Left: RGB Histogram / Waveform / Vectorscope compact cinema monitors
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.Top
+        // Left: scopes scroll if they do not fit; the audio meter stays pinned on the right
+        FadingScrollRow(
+            modifier = Modifier.weight(1f),
+            spacing = 8.dp,
+            verticalAlignment = Alignment.Top,
+            fade = false
         ) {
             if (showHistogram) {
-                RgbHistogramCard(
-                    telemetry = telemetry,
-                    onClick = onCycleScopeVisibility
-                )
+                RgbHistogramCard(telemetry = telemetry, onClick = onToggleHistogram)
             }
             if (showWaveform) {
-                LumaWaveformCard(
-                    telemetry = telemetry,
-                    onClick = onCycleScopeVisibility
-                )
+                LumaWaveformCard(telemetry = telemetry, onClick = onToggleWaveform)
             }
             if (showVectorscope) {
-                ChromaVectorscopeCard(
-                    telemetry = telemetry,
-                    onClick = onCycleScopeVisibility
-                )
+                ChromaVectorscopeCard(telemetry = telemetry, onClick = onToggleVectorscope)
             }
         }
+        if (showAudio) {
+            Spacer(modifier = Modifier.width(8.dp))
+            StereoAudioMeterCard(
+                leftDb = leftAudioDb,
+                rightDb = rightAudioDb,
+                peakDb = peakAudioDb
+            )
+        }
+    }
+}
 
-        // Right: Stereo 24-Bit dBFS Peak Audio Meter
-        StereoAudioMeterCard(
-            leftDb = leftAudioDb,
-            rightDb = rightAudioDb,
-            peakDb = peakAudioDb
-        )
+@Composable
+private fun ScopeCard(
+    width: Dp,
+    tag: String,
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(10.dp)
+    val clickModifier = if (onClick != null) Modifier.clickable { onClick() } else Modifier
+    Column(
+        modifier = Modifier
+            .width(width)
+            .clip(shape)
+            .background(NothingBlack.copy(alpha = 0.82f))
+            .border(1.dp, NothingBorder.copy(alpha = 0.7f), shape)
+            .then(clickModifier)
+            .padding(8.dp)
+            .testTag(tag)
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun ScopeHeader(title: String, titleColor: Color, trailing: String?, trailingColor: Color = NothingWhite) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = title, style = MaterialTheme.typography.labelSmall, color = titleColor, maxLines = 1)
+        if (trailing != null) {
+            Text(text = trailing, style = MaterialTheme.typography.labelSmall, color = trailingColor, maxLines = 1)
+        }
     }
 }
 
@@ -449,39 +480,13 @@ private fun RgbHistogramCard(
     telemetry: LiveScopeTelemetry,
     onClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .width(106.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(NothingBlack.copy(alpha = 0.78f))
-            .border(1.dp, NothingBorder, RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(6.dp)
-            .testTag("scope_rgb_histogram")
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "RGB HIST",
-                style = MaterialTheme.typography.labelSmall,
-                color = NothingSilver,
-                fontSize = 8.sp
-            )
-            Text(
-                text = "${telemetry.averageIre} IRE",
-                style = MaterialTheme.typography.labelMedium,
-                color = NothingWhite,
-                fontSize = 9.sp
-            )
-        }
-        Spacer(modifier = Modifier.height(3.dp))
+    ScopeCard(width = 120.dp, tag = "scope_rgb_histogram", onClick = onClick) {
+        ScopeHeader(title = "HIST", titleColor = NothingSilver, trailing = "${telemetry.averageIre} IRE")
+        Spacer(modifier = Modifier.height(4.dp))
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .height(40.dp)
         ) {
             val w = size.width
             val h = size.height
@@ -505,7 +510,6 @@ private fun RgbHistogramCard(
             drawPath(buildCurve(telemetry.greenHistogram), ScopeGreen.copy(alpha = 0.32f))
             drawPath(buildCurve(telemetry.blueHistogram), ScopeBlue.copy(alpha = 0.35f))
 
-            // Luma top contour
             for (i in 0 until bins - 1) {
                 val x1 = (i / (bins - 1f)) * w
                 val y1 = h - (telemetry.lumaHistogram[i] / 100f) * h
@@ -514,21 +518,22 @@ private fun RgbHistogramCard(
                 drawLine(NothingWhite.copy(alpha = 0.9f), Offset(x1, y1), Offset(x2, y2), 1.2.dp.toPx())
             }
         }
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "DR ${String.format(Locale.US, "%.1f", telemetry.dynamicRangeStops)}ST",
-                style = MaterialTheme.typography.labelMedium,
+                text = "DR ${String.format(Locale.US, "%.1f", telemetry.dynamicRangeStops)}",
+                style = MaterialTheme.typography.labelSmall,
                 color = ScopeGreen,
-                fontSize = 8.sp
+                maxLines = 1
             )
             Text(
                 text = "CLIP ${String.format(Locale.US, "%.1f%%", telemetry.highlightClipPercent)}",
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 color = if (telemetry.highlightClipPercent > 3f) NothingRed else NothingSilver,
-                fontSize = 8.sp
+                maxLines = 1
             )
         }
     }
@@ -539,42 +544,16 @@ private fun LumaWaveformCard(
     telemetry: LiveScopeTelemetry,
     onClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .width(98.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(NothingBlack.copy(alpha = 0.78f))
-            .border(1.dp, NothingBorder, RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(6.dp)
-            .testTag("scope_luma_waveform")
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "WFM LUMA",
-                style = MaterialTheme.typography.labelSmall,
-                color = ScopeGreen,
-                fontSize = 8.sp
-            )
-            Text(
-                text = "IRE 0-100",
-                style = MaterialTheme.typography.labelMedium,
-                color = NothingSilver,
-                fontSize = 8.sp
-            )
-        }
-        Spacer(modifier = Modifier.height(3.dp))
+    ScopeCard(width = 104.dp, tag = "scope_luma_waveform", onClick = onClick) {
+        ScopeHeader(title = "WFM", titleColor = ScopeGreen, trailing = "IRE", trailingColor = NothingSilver)
+        Spacer(modifier = Modifier.height(4.dp))
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .height(40.dp)
         ) {
             val w = size.width
             val h = size.height
-            // IRE Graticules at 25%, 50%, 75%, 95%
             listOf(0.05f, 0.25f, 0.5f, 0.75f).forEach { yNorm ->
                 drawLine(
                     color = NothingBorder.copy(alpha = 0.7f),
@@ -603,12 +582,6 @@ private fun LumaWaveformCard(
                 )
             }
         }
-        Text(
-            text = "18% MID GRAY LOCK",
-            style = MaterialTheme.typography.labelMedium,
-            color = NothingSilver,
-            fontSize = 8.sp
-        )
     }
 }
 
@@ -617,23 +590,9 @@ private fun ChromaVectorscopeCard(
     telemetry: LiveScopeTelemetry,
     onClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .width(74.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(NothingBlack.copy(alpha = 0.78f))
-            .border(1.dp, NothingBorder, RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(6.dp)
-            .testTag("scope_vectorscope")
-    ) {
-        Text(
-            text = "VECTOR",
-            style = MaterialTheme.typography.labelSmall,
-            color = ScopeCyan,
-            fontSize = 8.sp
-        )
-        Spacer(modifier = Modifier.height(2.dp))
+    ScopeCard(width = 78.dp, tag = "scope_vectorscope", onClick = onClick) {
+        ScopeHeader(title = "VEC", titleColor = ScopeCyan, trailing = null)
+        Spacer(modifier = Modifier.height(4.dp))
         Canvas(
             modifier = Modifier
                 .size(54.dp)
@@ -644,7 +603,6 @@ private fun ChromaVectorscopeCard(
             drawCircle(NothingBorder, radius = r, center = c, style = Stroke(1.dp.toPx()))
             drawCircle(NothingBorder.copy(alpha = 0.5f), radius = r * 0.5f, center = c, style = Stroke(0.8.dp.toPx()))
 
-            // Skin-tone I-line at ~123 degrees
             val skinRad = Math.toRadians(-123.0)
             drawLine(
                 color = ScopeAmber.copy(alpha = 0.65f),
@@ -656,7 +614,6 @@ private fun ChromaVectorscopeCard(
                 strokeWidth = 1.2.dp.toPx()
             )
 
-            // Chroma vector scatter points
             telemetry.vectorscopePoints.forEach { (u, v) ->
                 val px = c.x + u * r * 0.85f
                 val py = c.y - v * r * 0.85f
@@ -676,45 +633,27 @@ private fun StereoAudioMeterCard(
     rightDb: Float,
     peakDb: Float
 ) {
-    Column(
-        modifier = Modifier
-            .width(102.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(NothingBlack.copy(alpha = 0.78f))
-            .border(1.dp, NothingBorder, RoundedCornerShape(8.dp))
-            .padding(6.dp)
-            .testTag("audio_meter_card")
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "PCM 24B",
-                style = MaterialTheme.typography.labelSmall,
-                color = NothingSilver,
-                fontSize = 8.sp
-            )
-            Text(
-                text = String.format(Locale.US, "%.1fdB", peakDb),
-                style = MaterialTheme.typography.labelMedium,
-                color = if (peakDb > -3f) NothingRed else ScopeGreen,
-                fontSize = 8.sp
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
+    ScopeCard(width = 100.dp, tag = "audio_meter_card") {
+        ScopeHeader(
+            title = "AUDIO",
+            titleColor = NothingSilver,
+            trailing = String.format(Locale.US, "%.0f dB", peakDb),
+            trailingColor = if (peakDb > -3f) NothingRed else ScopeGreen
+        )
+        Spacer(modifier = Modifier.height(6.dp))
         AudioChannelBar(channelLabel = "L", dbValue = leftDb)
-        Spacer(modifier = Modifier.height(3.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         AudioChannelBar(channelLabel = "R", dbValue = rightDb)
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("-48", style = MaterialTheme.typography.labelMedium, color = NothingSilver, fontSize = 7.sp)
-            Text("-24", style = MaterialTheme.typography.labelMedium, color = NothingSilver, fontSize = 7.sp)
-            Text("-12", style = MaterialTheme.typography.labelMedium, color = ScopeAmber, fontSize = 7.sp)
-            Text("0dB", style = MaterialTheme.typography.labelMedium, color = NothingRed, fontSize = 7.sp)
+            Text("-48", style = MaterialTheme.typography.labelSmall, color = NothingSilver)
+            Text("-12", style = MaterialTheme.typography.labelSmall, color = ScopeAmber)
+            Text("0", style = MaterialTheme.typography.labelSmall, color = NothingRed)
         }
     }
 }
@@ -728,10 +667,9 @@ private fun AudioChannelBar(channelLabel: String, dbValue: Float) {
     ) {
         Text(
             text = channelLabel,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = NothingWhite,
-            fontSize = 8.sp,
-            modifier = Modifier.width(10.dp)
+            modifier = Modifier.width(14.dp)
         )
         Canvas(
             modifier = Modifier
