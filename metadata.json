@@ -1,0 +1,9 @@
+{
+  "name": "GlyphCam Pro",
+  "description": "Профессиональная фото и кино-видеокамера в стиле Nothing OS для Nothing Phone (2) с ручным контролем экспозиции, осциллографами, вектороскопом, LUT-грейдингом, анаморфным де-сквизом и студией Glyph-подсветки.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

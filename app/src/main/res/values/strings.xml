@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">GlyphCam Pro</string>
+    <string name="mode_photo_pro">ФОТО PRO</string>
+    <string name="mode_cine_video">КИНО ВИДЕО</string>
+    <string name="mode_glyph_rig">ГЛИФ СТУДИЯ</string>
+    <string name="mode_lut_color">LUT ПРОФИЛИ</string>
+    <string name="mode_media_vault">ОТНЯТЫЕ КАДРЫ</string>
+    <string name="permission_camera_title">ДОСТУП К СЕНСОРАМ NOTHING (2)</string>
+    <string name="permission_camera_desc">Для работы видоискателя Sony IMX890 / Samsung JN1, ручного управления выдержкой, ISO, фокусом и записи видео со звуком 24-bit предоставьте разрешение на камеру и микрофон.</string>
+    <string name="grant_permissions_btn">АКТИВИРОВАТЬ СЕНСОРЫ</string>
+    <string name="shutter_capture">Снять кадр</string>
+    <string name="record_toggle">Запись видео</string>
+    <string name="switch_lens">Переключить объектив</string>
+    <string name="toggle_scopes">Переключить телеметрию</string>
+    <string name="save_preset">Сохранить пресет</string>
+</resources>
