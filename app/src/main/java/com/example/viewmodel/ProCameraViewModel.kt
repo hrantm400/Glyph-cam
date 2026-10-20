@@ -17,6 +17,7 @@ import com.example.data.UserSettings
 import com.example.glyph.GlyphBridge
 import com.example.model.AnamorphicDeSqueeze
 import com.example.model.AntiBanding
+import com.example.model.AudioSourceOption
 import com.example.model.AppMode
 import com.example.model.AwbPreset
 import com.example.model.CameraCapabilities
@@ -31,6 +32,7 @@ import com.example.model.GridOverlayMode
 import com.example.model.IntervalCount
 import com.example.model.IntervalSpacing
 import com.example.model.JpegQuality
+import com.example.model.LensKind
 import com.example.model.LensOption
 import com.example.model.LiveExposureInfo
 import com.example.model.LiveScopeTelemetry
@@ -39,6 +41,7 @@ import com.example.model.PhotoAspect
 import com.example.model.PhotoDriveMode
 import com.example.model.PhotoFormat
 import com.example.model.ProcessingMode
+import com.example.model.RecordingLimit
 import com.example.model.SceneExtension
 import com.example.model.SavedCapture
 import com.example.model.SelfTimer
@@ -107,7 +110,11 @@ data class CameraBindKey(
     val jpegQuality: JpegQuality,
     val capturePriority: CapturePriority,
     val videoBitrate: VideoBitrate,
-    val sceneExtension: SceneExtension
+    val sceneExtension: SceneExtension,
+    val cameraId: String?,
+    val slowMotion: Boolean,
+    val audioSource: AudioSourceOption,
+    val mirrorSelfie: Boolean
 )
 
 data class ProCameraUiState(
@@ -224,7 +231,11 @@ data class ProCameraUiState(
     val keepScreenOn: Boolean = true,
     val quickSetting: QuickSetting? = null,
     val zoomRulerUntilMs: Long = 0L,
-    val deviceRotationDeg: Int = 0
+    val deviceRotationDeg: Int = 0,
+    val activeCameraId: String? = null, // null = default camera of the facing
+    val slowMotion: Boolean = true,
+    val audioSource: AudioSourceOption = AudioSourceOption.CAMCORDER,
+    val recordingLimit: RecordingLimit = RecordingLimit.NONE
 ) {
     val isVideoMode: Boolean get() = activeMode == AppMode.CINE_VIDEO
     val cameraMode: AppMode get() = if (activeMode.isCameraMode) activeMode else lastCameraMode
@@ -233,8 +244,12 @@ data class ProCameraUiState(
     val bindKey: CameraBindKey
         get() = CameraBindKey(
             cameraMode, useFrontCamera, photoFormat, videoResolution, videoFps, videoDynamicRange, stabilization,
-            photoAspect, jpegQuality, capturePriority, videoBitrate, if (cameraMode == AppMode.CINE_VIDEO) SceneExtension.NONE else sceneExtension
+            photoAspect, jpegQuality, capturePriority, videoBitrate, if (cameraMode == AppMode.CINE_VIDEO) SceneExtension.NONE else sceneExtension,
+            activeCameraId, slowMotion, audioSource, mirrorSelfie
         )
+
+    /** Recording at 120 fps or more through a constrained high-speed session. */
+    val isSlowMotionMode: Boolean get() = cameraMode == AppMode.CINE_VIDEO && videoFps.isHighSpeed
 
     /** Width / height of the viewfinder box. */
     val viewfinderAspect: Float
@@ -292,8 +307,13 @@ data class ProCameraUiState(
         }
 
     val selectedLensId: String?
-        get() = capabilities.lensOptions.minByOrNull { kotlin.math.abs(it.zoomRatio - zoomRatio) }
-            ?.takeIf { kotlin.math.abs(it.zoomRatio - zoomRatio) < 0.08f }?.id
+        get() {
+            val activeId = activeCameraId ?: capabilities.activeCameraId
+            return capabilities.lensOptions
+                .filter { it.cameraId == null || it.cameraId == activeId }
+                .minByOrNull { kotlin.math.abs(it.zoomRatio - zoomRatio) }
+                ?.takeIf { kotlin.math.abs(it.zoomRatio - zoomRatio) < 0.08f }?.id
+        }
 
     val lutColorMatrix: FloatArray?
         get() = if (activeLut.isIdentity && userContrast == 1f && userSaturation == 1f && shadowLift == 0f) null
@@ -353,7 +373,10 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 mirrorSelfie = settings.mirrorSelfie,
                 hapticsEnabled = settings.hapticsEnabled,
                 bakeLutIntoPhotos = settings.bakeLutIntoPhotos,
-                keepScreenOn = settings.keepScreenOn
+                keepScreenOn = settings.keepScreenOn,
+                audioSource = settings.audioSource,
+                recordingLimit = settings.recordingLimit,
+                slowMotion = settings.slowMotion
             )
         }
         controller.shutterSoundEnabled = settings.shutterSound
@@ -390,7 +413,11 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 capturePriority = s.capturePriority,
                 photoAspect = s.photoAspect,
                 videoBitrateMbps = s.videoBitrate.mbps,
-                extension = s.bindKey.sceneExtension
+                extension = s.bindKey.sceneExtension,
+                cameraId = s.activeCameraId,
+                slowMotion = s.slowMotion,
+                audioSource = s.audioSource.mediaRecorderSource,
+                mirrorFrontVideo = s.mirrorSelfie
             )
         )
     }
@@ -451,7 +478,10 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
             mirrorSelfie = s.mirrorSelfie,
             hapticsEnabled = s.hapticsEnabled,
             bakeLutIntoPhotos = s.bakeLutIntoPhotos,
-            keepScreenOn = s.keepScreenOn
+            keepScreenOn = s.keepScreenOn,
+            audioSource = s.audioSource,
+            recordingLimit = s.recordingLimit,
+            slowMotion = s.slowMotion
         ).save(getApplication())
         controller.shutterSoundEnabled = s.shutterSound
         controller.hapticsEnabled = s.hapticsEnabled
@@ -492,12 +522,20 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
 
     override fun onCapabilities(capabilities: CameraCapabilities) {
         _uiState.update { s ->
+            val resolution = if (capabilities.videoResolutions.contains(s.videoResolution)) s.videoResolution
+            else capabilities.videoResolutions.first()
+            val fps = when {
+                capabilities.supports(resolution, s.videoFps) -> s.videoFps
+                else -> capabilities.fpsFor(resolution).filter { !it.isHighSpeed && it.fps <= s.videoFps.fps }.lastOrNull()
+                    ?: capabilities.fpsFor(resolution).firstOrNull()
+                    ?: VideoFps.FPS_30
+            }
             s.copy(
                 capabilities = capabilities,
                 photoFormat = if (capabilities.photoFormats.contains(s.photoFormat)) s.photoFormat else PhotoFormat.JPEG,
-                videoResolution = if (capabilities.videoResolutions.contains(s.videoResolution)) s.videoResolution
-                else capabilities.videoResolutions.first(),
-                videoFps = if (capabilities.videoFps.contains(s.videoFps)) s.videoFps else capabilities.videoFps.first(),
+                videoResolution = resolution,
+                videoFps = fps,
+                activeCameraId = if (s.activeCameraId == null) null else capabilities.activeCameraId.takeIf { it.isNotEmpty() },
                 videoDynamicRange = if (capabilities.hdrVideo) s.videoDynamicRange else VideoDynamicRange.SDR,
                 flashMode = if (capabilities.hasFlash) s.flashMode else FlashMode.OFF,
                 evCompensation = if (capabilities.evRange > 0f) s.evCompensation.coerceIn(-capabilities.evRange, capabilities.evRange) else 0f,
@@ -670,7 +708,7 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
         if (s.isVideoMode) {
-            controller.toggleRecording(s.audioEnabled)
+            controller.toggleRecording(s.audioEnabled, s.recordingLimit.minutes * 60_000L)
         } else {
             val wasInterval = controller.isIntervalRunning
             val started = controller.capturePhoto(
@@ -798,20 +836,71 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setVideoResolution(resolution: VideoResolution) {
         _uiState.update { s ->
-            if (!s.capabilities.videoResolutions.contains(resolution)) return@update s.copy(statusBanner = "${resolution.label}: не поддерживается")
-            s.copy(videoResolution = resolution, statusBanner = "Разрешение: ${resolution.label} (${resolution.dimensions})")
+            val caps = s.capabilities
+            val known = caps.cameraLabel.isNotEmpty()
+            if (known && !caps.videoResolutions.contains(resolution)) return@update s.copy(statusBanner = "${resolution.label}: не поддерживается")
+            val fps = when {
+                !known || caps.supports(resolution, s.videoFps) -> s.videoFps
+                else -> caps.fpsFor(resolution).filter { !it.isHighSpeed && it.fps <= s.videoFps.fps }.lastOrNull()
+                    ?: caps.fpsFor(resolution).firstOrNull()
+                    ?: s.videoFps
+            }
+            s.copy(
+                videoResolution = resolution,
+                videoFps = fps,
+                statusBanner = "Разрешение: ${resolution.label} (${resolution.dimensions})" +
+                    if (fps != s.videoFps) " · частота ${fps.fps} к/с" else ""
+            )
         }
+        pushParams()
     }
 
+    /** Picks the frame rate; if the current resolution cannot do it, moves to the best resolution that can. */
     fun setVideoFps(fps: VideoFps) {
         _uiState.update { s ->
-            if (!s.capabilities.videoFps.contains(fps)) return@update s.copy(statusBanner = "${fps.fps} к/с: не поддерживается")
+            val caps = s.capabilities
+            val known = caps.cameraLabel.isNotEmpty()
+            val resolution = when {
+                !known -> s.videoResolution
+                caps.supports(s.videoResolution, fps) -> s.videoResolution
+                else -> caps.resolutionsFor(fps).firstOrNull()
+                    ?: return@update s.copy(statusBanner = "${fps.fps} к/с эта камера не поддерживает")
+            }
             val ns = if (s.shutterNs > 0L && s.useShutterAngleInVideo) {
                 (1_000_000_000.0 * s.shutterAngleDeg / (360.0 * fps.fps)).toLong()
             } else s.shutterNs
-            s.copy(videoFps = fps, shutterNs = ns, statusBanner = "Частота кадров: ${fps.fps} к/с")
+            s.copy(
+                videoFps = fps,
+                videoResolution = resolution,
+                shutterNs = ns,
+                statusBanner = buildString {
+                    append(if (fps.isHighSpeed) "Slow-motion ${fps.fps} к/с" else "Частота кадров: ${fps.fps} к/с")
+                    if (resolution != s.videoResolution) append(" · разрешение ${resolution.label}")
+                    if (fps.isHighSpeed) append(if (s.slowMotion) " · замедление ×${fps.slowMotionFactor}" else " · реальное время")
+                }
+            )
         }
         pushParams()
+    }
+
+    fun setSlowMotion(enabled: Boolean) {
+        _uiState.update {
+            it.copy(
+                slowMotion = enabled,
+                statusBanner = if (enabled) "Slow-motion: файл проигрывается замедленно" else "Slow-motion: файл в реальном времени, ${it.videoFps.fps} к/с"
+            )
+        }
+        persistSettings()
+    }
+
+    fun setAudioSource(source: AudioSourceOption) {
+        _uiState.update { it.copy(audioSource = source, statusBanner = "Микрофон: ${source.labelRu}") }
+        persistSettings()
+    }
+
+    fun setRecordingLimit(limit: RecordingLimit) {
+        _uiState.update { it.copy(recordingLimit = limit, statusBanner = if (limit == RecordingLimit.NONE) "Лимит записи снят" else "Лимит записи: ${limit.label}") }
+        persistSettings()
     }
 
     fun setDynamicRange(range: VideoDynamicRange) {
@@ -915,9 +1004,12 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun toggleFrontCamera() {
+        controller.setZoomRatio(1f)
         _uiState.update {
             it.copy(
                 useFrontCamera = !it.useFrontCamera,
+                activeCameraId = null,
+                zoomRatio = 1f,
                 manualFocusDiopters = null,
                 tapFocusNormalized = null,
                 aeAfLocked = false,
@@ -929,15 +1021,34 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun selectLens(option: LensOption) {
-        if (option.isFront != _uiState.value.useFrontCamera) {
+        val s = _uiState.value
+        if (option.isFront != s.useFrontCamera) {
             toggleFrontCamera()
+            return
+        }
+        val currentId = s.activeCameraId ?: s.capabilities.activeCameraId
+        val equiv = option.focalEquivMm?.let { mm -> " · ≈$mm мм" } ?: ""
+        if (option.cameraId != null && option.cameraId != currentId) {
+            // A different physical camera: rebind on it at 1× and drop per-lens focus state.
+            controller.setZoomRatio(1f)
+            _uiState.update {
+                it.copy(
+                    activeCameraId = option.cameraId,
+                    zoomRatio = 1f,
+                    manualFocusDiopters = null,
+                    tapFocusNormalized = null,
+                    aeAfLocked = false,
+                    focusMagnifier = false,
+                    statusBanner = "${option.kind.labelRu} ${option.label}$equiv"
+                )
+            }
             return
         }
         controller.setZoomRatio(option.zoomRatio)
         _uiState.update {
             it.copy(
                 zoomRatio = option.zoomRatio,
-                statusBanner = option.focalEquivMm?.let { mm -> "${option.label} · ≈$mm мм" } ?: option.label
+                statusBanner = (if (option.kind != LensKind.MAIN && option.kind != LensKind.FRONT) "${option.kind.labelRu} " else "") + option.label + equiv
             )
         }
     }
@@ -1136,7 +1247,7 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun cycleVideoFps() {
         _uiState.update { s ->
-            val list = s.capabilities.videoFps
+            val list = s.capabilities.fpsFor(s.videoResolution).ifEmpty { listOf(s.videoFps) }
             val next = list[(list.indexOf(s.videoFps) + 1).mod(list.size)]
             val ns = if (s.shutterNs > 0L && s.useShutterAngleInVideo) {
                 (1_000_000_000.0 * s.shutterAngleDeg / (360.0 * next.fps)).toLong()
@@ -1332,6 +1443,7 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
 
         _uiState.update { s ->
             val caps = s.capabilities
+            val targetResolution = resolution?.takeIf { caps.videoResolutions.contains(it) } ?: s.videoResolution
             s.copy(
                 activeMode = if (preset.isVideoPreset) AppMode.CINE_VIDEO else AppMode.PHOTO_PRO,
                 lastCameraMode = if (preset.isVideoPreset) AppMode.CINE_VIDEO else AppMode.PHOTO_PRO,
@@ -1347,8 +1459,8 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 glyphMode = glyphMode,
                 activeGlyphSegments = glyphMode.segments,
                 glyphBrightness = preset.glyphBrightness,
-                videoResolution = resolution?.takeIf { caps.videoResolutions.contains(it) } ?: s.videoResolution,
-                videoFps = fps?.takeIf { caps.videoFps.contains(it) } ?: s.videoFps,
+                videoResolution = targetResolution,
+                videoFps = fps?.takeIf { caps.cameraLabel.isEmpty() || caps.supports(targetResolution, it) } ?: s.videoFps,
                 videoDynamicRange = if (preset.hdrVideo && caps.hdrVideo) VideoDynamicRange.HLG_10 else VideoDynamicRange.SDR,
                 statusBanner = "Пресет ${preset.slotCode}: ${preset.name}"
             )

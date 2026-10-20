@@ -234,6 +234,7 @@ fun GlyphCamStudioScreen(
             setDynamicRange = viewModel::setDynamicRange,
             setStabilization = viewModel::setStabilization,
             setVideoBitrate = viewModel::setVideoBitrate,
+            setSlowMotion = viewModel::setSlowMotion,
             setAnamorphic = viewModel::setAnamorphic,
             setAspectGuide = viewModel::setAspectGuide,
             setPeaking = viewModel::setFocusPeaking,
@@ -335,6 +336,8 @@ fun GlyphCamStudioScreen(
                     onCapturePriority = viewModel::setCapturePriority,
                     onPhotoAspect = viewModel::setPhotoAspect,
                     onVideoBitrate = viewModel::setVideoBitrate,
+                    onAudioSource = viewModel::setAudioSource,
+                    onRecordingLimit = viewModel::setRecordingLimit,
                     onAntiBanding = viewModel::setAntiBanding,
                     onNoiseReduction = viewModel::setNoiseReduction,
                     onEdgeMode = viewModel::setEdgeMode,
@@ -1176,6 +1179,16 @@ private fun ViewfinderBadges(state: ProCameraUiState, modifier: Modifier = Modif
         }
         if (state.isRecording && state.isRecordingPaused) {
             ViewfinderBadge(text = "ПАУЗА · ${state.formattedTimecode}", color = ScopeAmber, tag = "badge_paused")
+        }
+        if (state.isSlowMotionMode) {
+            ViewfinderBadge(
+                text = "SLOW-MO ${state.videoFps.fps} К/С" + if (state.slowMotion) " · ×${state.videoFps.slowMotionFactor}" else " · РЕАЛЬНОЕ ВРЕМЯ",
+                color = ScopeMagenta,
+                tag = "badge_slowmo"
+            )
+        }
+        if (state.capabilities.cameraKind != com.example.model.LensKind.MAIN && state.capabilities.cameraKind != com.example.model.LensKind.FRONT) {
+            ViewfinderBadge(text = state.capabilities.cameraKind.labelRu.uppercase(), color = NothingWhite, tag = "badge_lens_kind")
         }
         if (state.isExtensionActive) {
             ViewfinderBadge(text = state.sceneExtension.labelRu.uppercase(), color = ScopeMagenta, tag = "badge_scene")

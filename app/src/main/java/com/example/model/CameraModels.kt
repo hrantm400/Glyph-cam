@@ -17,12 +17,23 @@ enum class AppMode(val titleRu: String, val badgeCode: String) {
  * logical camera and the focal lengths of its physical cameras, so every pill switches to a
  * zoom ratio the device can actually deliver.
  */
+enum class LensKind(val labelRu: String, val code: String) {
+    ULTRA_WIDE("Сверхширокий", "UW"),
+    MAIN("Основной", ""),
+    TELE("Телеобъектив", "TELE"),
+    MACRO("Макро", "MACRO"),
+    FRONT("Фронтальный", "")
+}
+
+/** A lens pill: a zoom step on the active camera, or a switch to another physical camera of the phone. */
 data class LensOption(
     val id: String,
     val label: String,
     val zoomRatio: Float,
     val focalEquivMm: Int? = null,
-    val isFront: Boolean = false
+    val isFront: Boolean = false,
+    val cameraId: String? = null, // null = zoom step on whichever camera is active
+    val kind: LensKind = LensKind.MAIN
 )
 
 enum class PhotoFormat(val label: String, val badge: String, val descRu: String) {
@@ -128,8 +139,35 @@ enum class VideoResolution(val label: String, val dimensions: String) {
 
 enum class VideoFps(val fps: Int, val label: String) {
     FPS_24(24, "24"),
+    FPS_25(25, "25"),
     FPS_30(30, "30"),
-    FPS_60(60, "60")
+    FPS_50(50, "50"),
+    FPS_60(60, "60"),
+    FPS_120(120, "120"),
+    FPS_240(240, "240"),
+    FPS_480(480, "480"),
+    FPS_960(960, "960");
+
+    /** 120 fps and above need a constrained high-speed session (slow motion). */
+    val isHighSpeed: Boolean get() = fps >= 120
+
+    /** Slow-down factor when a high-speed clip is written for 30 fps playback. */
+    val slowMotionFactor: Int get() = (fps / 30).coerceAtLeast(1)
+}
+
+/** Values are android.media.MediaRecorder.AudioSource constants. */
+enum class AudioSourceOption(val labelRu: String, val mediaRecorderSource: Int, val descRu: String) {
+    CAMCORDER("Камкордер", 5, "Микрофон, направленный к сцене, с подавлением шума"),
+    MIC("Стандартный", 1, "Основной микрофон, как в диктофоне"),
+    UNPROCESSED("Без обработки", 9, "Сырой сигнал без шумоподавления и автоусиления, для монтажа")
+}
+
+enum class RecordingLimit(val minutes: Int, val label: String) {
+    NONE(0, "Без лимита"),
+    M1(1, "1 мин"),
+    M5(5, "5 мин"),
+    M10(10, "10 мин"),
+    M30(30, "30 мин")
 }
 
 enum class VideoDynamicRange(val label: String, val descRu: String) {
@@ -391,6 +429,12 @@ data class CameraCapabilities(
     val apertureLabel: String = "",
     val focalEquivMm: Int = 0,
     val lensOptions: List<LensOption> = emptyList(),
+    val activeCameraId: String = "",
+    val cameraKind: LensKind = LensKind.MAIN,
+    /** Standard-session frame rates per resolution (Camera2 stream map + AE ranges). */
+    val fpsByResolution: Map<VideoResolution, List<VideoFps>> = emptyMap(),
+    /** High-speed (slow-motion) frame rates per resolution. */
+    val highSpeedFpsByResolution: Map<VideoResolution, List<VideoFps>> = emptyMap(),
     val zslSupported: Boolean = false,
     val antiBandingModes: Set<AntiBanding> = setOf(AntiBanding.AUTO),
     val noiseReductionModes: Set<ProcessingMode> = setOf(ProcessingMode.AUTO),
@@ -398,6 +442,22 @@ data class CameraCapabilities(
     val availableExtensions: Set<SceneExtension> = setOf(SceneExtension.NONE)
 ) {
     val evRange: Float get() = if (evStep > 0f) evIndexMax * evStep else 0f
+
+    /** Frame rates this resolution can record, standard first, then slow-motion. */
+    fun fpsFor(resolution: VideoResolution): List<VideoFps> {
+        if (fpsByResolution.isEmpty() && highSpeedFpsByResolution.isEmpty()) return videoFps
+        return (fpsByResolution[resolution].orEmpty() + highSpeedFpsByResolution[resolution].orEmpty())
+            .distinct()
+            .sortedBy { it.fps }
+    }
+
+    fun supports(resolution: VideoResolution, fps: VideoFps): Boolean = fpsFor(resolution).contains(fps)
+
+    /** Resolutions that can record at the given frame rate, highest first. */
+    fun resolutionsFor(fps: VideoFps): List<VideoResolution> = VideoResolution.entries.filter { supports(it, fps) }
+
+    val allVideoFps: List<VideoFps>
+        get() = VideoResolution.entries.flatMap { fpsFor(it) }.distinct().sortedBy { it.fps }.ifEmpty { videoFps }
 }
 
 sealed class CameraStatus {

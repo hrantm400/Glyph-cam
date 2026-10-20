@@ -18,6 +18,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.params.StreamConfigurationMap
 import android.hardware.camera2.TotalCaptureResult
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -46,7 +47,9 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalSessionConfig
 import androidx.camera.core.ExperimentalZeroShutterLag
+import androidx.camera.core.MirrorMode
 import androidx.camera.core.DynamicRange
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
@@ -62,7 +65,9 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.ExperimentalHighSpeedVideo
 import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.HighSpeedVideoSessionConfig
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -82,6 +87,7 @@ import com.example.model.CameraCapabilities
 import com.example.model.CameraStatus
 import com.example.model.CapturePriority
 import com.example.model.FlashMode
+import com.example.model.LensKind
 import com.example.model.LensOption
 import com.example.model.LiveExposureInfo
 import com.example.model.LiveScopeTelemetry
@@ -123,6 +129,7 @@ import kotlin.math.sqrt
  * available the UI is told so.
  */
 @OptIn(ExperimentalCamera2Interop::class, ExperimentalZeroShutterLag::class)
+@kotlin.OptIn(ExperimentalHighSpeedVideo::class, ExperimentalSessionConfig::class)
 class ProCameraController(
     private val context: Context,
     private val scope: CoroutineScope,
@@ -160,7 +167,11 @@ class ProCameraController(
         val capturePriority: CapturePriority = CapturePriority.QUALITY,
         val photoAspect: PhotoAspect = PhotoAspect.FULL_4_3,
         val videoBitrateMbps: Int = 0, // 0 = let the encoder decide
-        val extension: SceneExtension = SceneExtension.NONE
+        val extension: SceneExtension = SceneExtension.NONE,
+        val cameraId: String? = null, // null = the default camera for the facing
+        val slowMotion: Boolean = true, // high-speed clips written for 30 fps playback
+        val audioSource: Int = MediaRecorder.AudioSource.CAMCORDER,
+        val mirrorFrontVideo: Boolean = true
     )
 
     data class ManualParams(
@@ -209,6 +220,7 @@ class ProCameraController(
     private var currentRotation = Surface.ROTATION_0
     private var recordingPaused = false
     private var intervalRunning = false
+    private var highSpeedActive = false
     private var mediaActionSound: MediaActionSound? = null
 
     /** Shutter click / record start-stop sounds. */
@@ -219,6 +231,7 @@ class ProCameraController(
     val isIntervalRunning: Boolean get() = intervalRunning
     val isRecordingPaused: Boolean get() = recordingPaused
     val currentExtension: SceneExtension get() = activeExtension
+    val isHighSpeedActive: Boolean get() = highSpeedActive
 
     @Volatile
     var capabilities: CameraCapabilities = CameraCapabilities()
@@ -321,10 +334,29 @@ class ProCameraController(
         }
         val useFront = (request.useFront && hasFront) || !hasBack
         frontCameraActive = useFront
-        val baseSelector = if (useFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-        val info = provider.getCameraInfo(baseSelector)
+        val facing = if (useFront) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
+        val defaultSelector = if (useFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+        val defaultInfo = provider.getCameraInfo(defaultSelector)
+        val defaultId = cameraIdOf(defaultInfo)
+        val sameFacing = runCatching { provider.availableCameraInfos.filter { it.lensFacing == facing } }.getOrDefault(emptyList())
+        val targetInfo = request.cameraId?.let { id -> sameFacing.firstOrNull { cameraIdOf(it) == id } }
+        val targetId = targetInfo?.let { cameraIdOf(it) }
+        val baseSelector = if (targetInfo != null && targetId != null && targetId != defaultId) {
+            CameraSelector.Builder()
+                .requireLensFacing(facing)
+                .addCameraFilter { infos -> infos.filter { cameraIdOf(it) == targetId }.ifEmpty { infos } }
+                .build()
+        } else defaultSelector
+        val info = targetInfo ?: defaultInfo
         val isVideo = request.mode == AppMode.CINE_VIDEO
-        val caps = probeCapabilities(info, useFront, hasFront).copy(availableExtensions = probeExtensions(baseSelector))
+        val lensOptions = buildLensOptions(info, defaultInfo, sameFacing, useFront)
+        val activeId = cameraIdOf(info) ?: ""
+        val caps = probeCapabilities(info, useFront, hasFront).copy(
+            availableExtensions = probeExtensions(baseSelector),
+            lensOptions = lensOptions,
+            activeCameraId = activeId,
+            cameraKind = lensOptions.firstOrNull { it.cameraId == activeId }?.kind ?: if (useFront) LensKind.FRONT else LensKind.MAIN
+        )
         capabilities = caps
         listener.onCapabilities(caps)
 
@@ -339,7 +371,9 @@ class ProCameraController(
                     baseSelector
                 }
         } else baseSelector
-        val fpsSupported = caps.videoFps.contains(request.fps)
+        val highSpeedWanted = isVideo && request.fps.isHighSpeed &&
+            caps.highSpeedFpsByResolution[request.videoResolution]?.contains(request.fps) == true
+        val fpsSupported = isVideo && !highSpeedWanted && caps.supports(request.videoResolution, request.fps)
         val wide = isVideo || request.photoAspect == PhotoAspect.WIDE_16_9
 
         val previewBuilder = Preview.Builder()
@@ -385,7 +419,27 @@ class ProCameraController(
         var camera: Camera? = null
         var boundTier = -1
         var lastError: Exception? = null
+        highSpeedActive = false
+        val highSpeedCapture = videoCapture
+        if (highSpeedWanted && highSpeedCapture != null) {
+            try {
+                provider.unbindAll()
+                val config = HighSpeedVideoSessionConfig(
+                    highSpeedCapture,
+                    preview,
+                    Range(request.fps.fps, request.fps.fps),
+                    request.slowMotion
+                )
+                camera = provider.bindToLifecycle(owner, selector, config)
+                boundTier = 1 // preview + video, no analysis stream in a constrained high-speed session
+                highSpeedActive = true
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(tag, "high-speed bind failed: ${e.message}")
+            }
+        }
         for ((index, tier) in tiers.withIndex()) {
+            if (camera != null) break
             try {
                 provider.unbindAll()
                 camera = if (viewPort != null) {
@@ -430,7 +484,14 @@ class ProCameraController(
             if (isVideo) {
                 append(" · ")
                 append(request.videoResolution.label)
-                append(if (fpsSupported) " ${request.fps.fps}p" else "")
+                when {
+                    highSpeedActive -> {
+                        append(" ${request.fps.fps} к/с")
+                        append(if (request.slowMotion) " · slow-mo ×${request.fps.slowMotionFactor}" else " · реальное время")
+                    }
+                    fpsSupported -> append(" ${request.fps.fps}p")
+                    request.fps.isHighSpeed -> append(" · ${request.fps.fps} к/с не удалось, обычная сессия")
+                }
             } else {
                 append(" · ")
                 append(activePhotoFormat.label)
@@ -488,9 +549,11 @@ class ProCameraController(
         }
         val recorderBuilder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(quality, FallbackStrategy.lowerQualityOrHigherThan(quality)))
+            .setAudioSource(request.audioSource)
         if (request.videoBitrateMbps > 0) recorderBuilder.setTargetVideoEncodingBitRate(request.videoBitrateMbps * 1_000_000)
         val recorder = recorderBuilder.build()
         val builder = VideoCapture.Builder(recorder)
+        if (request.mirrorFrontVideo) builder.setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
         if (fpsSupported) builder.setTargetFrameRate(Range(request.fps.fps, request.fps.fps))
         if (request.dynamicRange == VideoDynamicRange.HLG_10 && caps.hdrVideo) builder.setDynamicRange(DynamicRange.HLG_10_BIT)
         if (request.stabilization && caps.videoStabilization) builder.setVideoStabilizationEnabled(true)
@@ -542,9 +605,24 @@ class ProCameraController(
         }
         val hdr = runCatching { videoCaps?.supportedDynamicRanges?.contains(DynamicRange.HLG_10_BIT) }.getOrNull() == true
         val fpsRanges = runCatching { info.supportedFrameRateRanges }.getOrDefault(emptySet())
-        val fpsOptions = VideoFps.entries.filter { opt ->
-            fpsRanges.any { r -> r.upper >= opt.fps && r.lower <= opt.fps }
-        }.ifEmpty { listOf(VideoFps.FPS_30) }
+        val streamMap = ch(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val resolutionSizes = mapOf(
+            VideoResolution.UHD_4K to Size(3840, 2160),
+            VideoResolution.FHD_1080P to Size(1920, 1080),
+            VideoResolution.HD_720P to Size(1280, 720)
+        )
+        val standardFps = VideoFps.entries.filter { !it.isHighSpeed }
+        val fpsByResolution = resolutions.associateWith { res ->
+            val maxFps = maxRecordingFps(streamMap, resolutionSizes.getValue(res))
+            standardFps.filter { opt ->
+                (maxFps == 0 || opt.fps <= maxFps + 1) && fpsRanges.any { r -> r.upper >= opt.fps && r.lower <= opt.fps }
+            }.ifEmpty { listOf(VideoFps.FPS_30) }
+        }
+        val highSpeedByResolution = probeHighSpeed(info, streamMap, resolutionSizes)
+        val fpsOptions = (fpsByResolution.values.flatten() + highSpeedByResolution.values.flatten())
+            .distinct()
+            .sortedBy { it.fps }
+            .ifEmpty { listOf(VideoFps.FPS_30) }
         val previewStab = runCatching { Preview.getPreviewCapabilities(info).isStabilizationSupported }.getOrDefault(false)
         val videoStab = runCatching { videoCaps?.isStabilizationSupported }.getOrNull() == true
         val zsl = Build.VERSION.SDK_INT >= 23 && runCatching { info.isZslSupported }.getOrDefault(false)
@@ -584,13 +662,14 @@ class ProCameraController(
             photoFormats = photoFormats,
             videoResolutions = resolutions,
             videoFps = fpsOptions,
+            fpsByResolution = fpsByResolution,
+            highSpeedFpsByResolution = highSpeedByResolution,
             hdrVideo = hdr,
             previewStabilization = previewStab,
             videoStabilization = videoStab,
             sensorMegapixels = megapixels,
             apertureLabel = apertureLabel,
             focalEquivMm = focalEquiv ?: 0,
-            lensOptions = buildLensOptions(info, zoom, focalEquiv, isFront),
             zslSupported = zsl,
             antiBandingModes = antiBanding,
             noiseReductionModes = noiseModes,
@@ -615,44 +694,141 @@ class ProCameraController(
         return (focalMm * 43.27f / diagonal).roundToInt().coerceIn(8, 400)
     }
 
-    /** Lens pills: one per physical camera the logical camera can switch to, plus the usual 1× and 2× crops. */
-    private fun buildLensOptions(info: CameraInfo, zoom: ZoomState?, mainEquiv: Int?, isFront: Boolean): List<LensOption> {
-        val minZoom = zoom?.minZoomRatio ?: 1f
-        val maxZoom = zoom?.maxZoomRatio ?: 1f
-        val ratios = sortedSetOf(1.0f)
-        if (!isFront) {
-            val physical = runCatching { info.physicalCameraInfos }.getOrDefault(emptySet())
-            if (mainEquiv != null && physical.size > 1) {
-                physical.forEach { phys ->
-                    val c2 = runCatching { Camera2CameraInfo.from(phys) }.getOrNull() ?: return@forEach
-                    val f = runCatching { c2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) }.getOrNull()?.firstOrNull()
-                    val size = runCatching { c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) }.getOrNull()
-                    val eq = equivalentFocal(f, size?.width, size?.height) ?: return@forEach
-                    val ratio = eq.toFloat() / mainEquiv
-                    if (ratio in (minZoom - 0.05f)..(maxZoom + 0.05f)) {
-                        val rounded = (ratio * 10f).roundToInt() / 10f
-                        if (ratios.none { abs(it - rounded) < 0.15f }) ratios.add(rounded)
-                    }
+    /** Highest frame rate the recorder stream supports at this size, 0 when unknown. */
+    private fun maxRecordingFps(map: StreamConfigurationMap?, size: Size): Int {
+        if (map == null) return 0
+        val duration = runCatching { map.getOutputMinFrameDuration(MediaRecorder::class.java, size) }.getOrDefault(0L)
+        return if (duration > 0L) (1_000_000_000.0 / duration).toInt() else 0
+    }
+
+    /** Slow-motion options: Camera2 constrained high-speed ranges intersected with what CameraX can record. */
+    private fun probeHighSpeed(
+        info: CameraInfo,
+        map: StreamConfigurationMap?,
+        resolutionSizes: Map<VideoResolution, Size>
+    ): Map<VideoResolution, List<VideoFps>> {
+        if (map == null || Build.VERSION.SDK_INT < 23) return emptyMap()
+        val hsCaps = runCatching { Recorder.getHighSpeedVideoCapabilities(info) }.getOrNull() ?: return emptyMap()
+        val hsQualities = runCatching { hsCaps.getSupportedQualities(DynamicRange.SDR) }.getOrNull() ?: return emptyMap()
+        if (hsQualities.isEmpty()) return emptyMap()
+        val ranges = runCatching { map.highSpeedVideoFpsRanges.toList() }.getOrDefault(emptyList())
+        val result = mutableMapOf<VideoResolution, MutableList<VideoFps>>()
+        for (range in ranges) {
+            val option = VideoFps.entries.firstOrNull { it.isHighSpeed && it.fps == range.upper } ?: continue
+            val sizes = runCatching { map.getHighSpeedVideoSizesFor(range).toList() }.getOrDefault(emptyList())
+            for ((res, size) in resolutionSizes) {
+                val quality = when (res) {
+                    VideoResolution.UHD_4K -> Quality.UHD
+                    VideoResolution.FHD_1080P -> Quality.FHD
+                    VideoResolution.HD_720P -> Quality.HD
+                }
+                if (sizes.contains(size) && hsQualities.contains(quality)) {
+                    val list = result.getOrPut(res) { mutableListOf() }
+                    if (!list.contains(option)) list.add(option)
                 }
             }
-            if (minZoom < 0.95f && ratios.none { it < 0.95f }) ratios.add((minZoom * 10f).roundToInt() / 10f)
-            if (maxZoom >= 2f && ratios.none { it in 1.6f..2.4f }) ratios.add(2.0f)
         }
-        return ratios.map { ratio ->
-            val clamped = ratio.coerceIn(minZoom, maxZoom)
-            val label = if (clamped < 0.95f || abs(clamped - clamped.roundToInt()) > 0.05f) {
-                String.format(Locale.US, "%.1f×", clamped)
-            } else {
-                "${clamped.roundToInt()}×"
+        return result.mapValues { (_, v) -> v.sortedBy { it.fps } }
+    }
+
+    private fun cameraIdOf(info: CameraInfo): String? = runCatching { Camera2CameraInfo.from(info).cameraId }.getOrNull()
+
+    private class LensFacts(val id: String, val equivMm: Int?, val minFocusDiopters: Float)
+
+    private fun lensFacts(info: CameraInfo): LensFacts? {
+        val id = cameraIdOf(info) ?: return null
+        val c2 = runCatching { Camera2CameraInfo.from(info) }.getOrNull()
+        fun <T> ch(key: CameraCharacteristics.Key<T>): T? = runCatching { c2?.getCameraCharacteristic(key) }.getOrNull()
+        val focal = ch(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+        val size = ch(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val minFocus = ch(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+        return LensFacts(id, equivalentFocal(focal, size?.width, size?.height), minFocus)
+    }
+
+    private fun ratioLabel(ratio: Float): String =
+        if (ratio < 0.95f || abs(ratio - ratio.roundToInt()) > 0.05f) String.format(Locale.US, "%.1f×", ratio) else "${ratio.roundToInt()}×"
+
+    /**
+     * Lens pills: every camera of this facing the phone exposes (ultra-wide, main, tele, macro) labelled
+     * relative to the main camera, plus the zoom steps available inside the active camera.
+     */
+    private fun buildLensOptions(
+        active: CameraInfo,
+        default: CameraInfo,
+        sameFacing: List<CameraInfo>,
+        isFront: Boolean
+    ): List<LensOption> {
+        val activeFacts = lensFacts(active)
+        val defaultId = cameraIdOf(default)
+        val mainEquiv = lensFacts(default)?.equivMm ?: activeFacts?.equivMm
+        val zoom = active.zoomState.value
+        val minZoom = zoom?.minZoomRatio ?: 1f
+        val maxZoom = zoom?.maxZoomRatio ?: 1f
+        val entries = mutableListOf<Pair<Float, LensOption>>()
+
+        fun ratioOf(facts: LensFacts): Float? = when {
+            mainEquiv != null && mainEquiv > 0 && facts.equivMm != null -> facts.equivMm.toFloat() / mainEquiv
+            facts.id == activeFacts?.id || facts.id == defaultId -> 1f
+            else -> null
+        }
+
+        val cameras = (listOfNotNull(activeFacts) + sameFacing.mapNotNull { lensFacts(it) }.filter { it.id != activeFacts?.id })
+            .distinctBy { it.id }
+        cameras.forEach { facts ->
+            val ratio = ratioOf(facts) ?: return@forEach
+            val rounded = (ratio * 10f).roundToInt() / 10f
+            if (entries.any { abs(it.first - rounded) < 0.15f }) return@forEach
+            val kind = when {
+                isFront -> LensKind.FRONT
+                facts.id == defaultId -> LensKind.MAIN
+                rounded < 0.85f -> LensKind.ULTRA_WIDE
+                rounded > 1.3f -> LensKind.TELE
+                facts.minFocusDiopters >= 8f -> LensKind.MACRO
+                else -> LensKind.MAIN
             }
-            LensOption(
-                id = String.format(Locale.US, "z%.1f", clamped),
-                label = label,
-                zoomRatio = clamped,
-                focalEquivMm = mainEquiv?.let { (it * clamped).roundToInt() },
-                isFront = isFront
+            entries += rounded to LensOption(
+                id = "cam${facts.id}",
+                label = ratioLabel(rounded),
+                zoomRatio = 1f,
+                focalEquivMm = facts.equivMm,
+                isFront = isFront,
+                cameraId = facts.id,
+                kind = kind
             )
         }
+
+        // Zoom steps inside the active camera: logical multi-camera switch points and the usual crops.
+        val activeRatio = activeFacts?.let { ratioOf(it) } ?: 1f
+        val steps = sortedSetOf<Float>()
+        val onDefaultCamera = activeFacts == null || defaultId == null || activeFacts.id == defaultId
+        if (!isFront && onDefaultCamera) {
+            if (minZoom < 0.95f) steps.add((minZoom * 10f).roundToInt() / 10f)
+            if (maxZoom >= 2f) steps.add(2f)
+            if (maxZoom >= 5f) steps.add(5f)
+        }
+        steps.forEach { step ->
+            val clamped = step.coerceIn(minZoom, maxZoom)
+            val absolute = (activeRatio * clamped * 10f).roundToInt() / 10f
+            if (entries.any { abs(it.first - absolute) < 0.15f }) return@forEach
+            entries += absolute to LensOption(
+                id = String.format(Locale.US, "z%.1f", clamped),
+                label = ratioLabel(absolute),
+                zoomRatio = clamped,
+                focalEquivMm = mainEquiv?.let { (it * absolute).roundToInt() },
+                isFront = isFront,
+                cameraId = null,
+                kind = when {
+                    isFront -> LensKind.FRONT
+                    absolute < 0.85f -> LensKind.ULTRA_WIDE
+                    absolute > 1.3f -> LensKind.TELE
+                    else -> LensKind.MAIN
+                }
+            )
+        }
+        if (entries.isEmpty()) {
+            entries += 1f to LensOption(id = "z1.0", label = "1×", zoomRatio = 1f, focalEquivMm = mainEquiv, isFront = isFront, kind = if (isFront) LensKind.FRONT else LensKind.MAIN)
+        }
+        return entries.sortedBy { it.first }.map { it.second }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1194,7 +1370,7 @@ class ProCameraController(
     // ------------------------------------------------------------------------------------------
 
     @SuppressLint("MissingPermission")
-    fun toggleRecording(audioEnabled: Boolean) {
+    fun toggleRecording(audioEnabled: Boolean, durationLimitMs: Long = 0L) {
         activeRecording?.let {
             it.stop()
             return
@@ -1206,9 +1382,10 @@ class ProCameraController(
         }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val name = "GlyphCam_$stamp.mp4"
-        val options = MediaStoreOutputOptions.Builder(resolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+        val optionsBuilder = MediaStoreOutputOptions.Builder(resolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
             .setContentValues(mediaValues(name, "video/mp4"))
-            .build()
+        if (durationLimitMs > 0L) optionsBuilder.setDurationLimitMillis(durationLimitMs)
+        val options = optionsBuilder.build()
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         var pending = capture.output.prepareRecording(context, options)
         if (audioEnabled && hasMic) pending = pending.withAudioEnabled()
@@ -1314,7 +1491,16 @@ class ProCameraController(
                         val capture = describeVideo(uri, name)
                         withContext(Dispatchers.Main) { listener.onCaptureSaved(capture) }
                     }
-                    if (event.hasError()) listener.onMessage("Запись остановлена (код ${event.error}), файл сохранён")
+                    if (event.hasError()) {
+                        listener.onMessage(
+                            when (event.error) {
+                                VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED -> "Достигнут лимит записи, файл сохранён"
+                                VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED -> "Достигнут лимит размера файла, запись сохранена"
+                                VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE -> "Закончилось место, запись сохранена"
+                                else -> "Запись остановлена (код ${event.error}), файл сохранён"
+                            }
+                        )
+                    }
                 } else {
                     val reason = when (event.error) {
                         VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA -> "слишком короткая запись"

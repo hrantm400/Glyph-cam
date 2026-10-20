@@ -5,7 +5,12 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.UserSettings
 import com.example.model.AppMode
+import com.example.model.CameraCapabilities
 import com.example.model.GlyphLightingMode
+import com.example.model.LensKind
+import com.example.model.LensOption
+import com.example.model.VideoFps
+import com.example.model.VideoResolution
 import com.example.model.IntervalCount
 import com.example.model.JpegQuality
 import com.example.model.LutProfile
@@ -131,5 +136,61 @@ class ExampleRobolectricTest {
         assertTrue(vm.onVolumeKey())
         vm.toggleVolumeKeyShutter()
         assertFalse(vm.onVolumeKey())
+    }
+
+    @Test
+    fun `frame rate and resolution follow what the camera reports, lenses switch cameras`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = ProCameraViewModel(app)
+        val caps = CameraCapabilities(
+            cameraLabel = "Основная камера · 50 МП",
+            videoResolutions = listOf(VideoResolution.UHD_4K, VideoResolution.FHD_1080P, VideoResolution.HD_720P),
+            fpsByResolution = mapOf(
+                VideoResolution.UHD_4K to listOf(VideoFps.FPS_24, VideoFps.FPS_30),
+                VideoResolution.FHD_1080P to listOf(VideoFps.FPS_24, VideoFps.FPS_30, VideoFps.FPS_60),
+                VideoResolution.HD_720P to listOf(VideoFps.FPS_30, VideoFps.FPS_60)
+            ),
+            highSpeedFpsByResolution = mapOf(
+                VideoResolution.FHD_1080P to listOf(VideoFps.FPS_120, VideoFps.FPS_240),
+                VideoResolution.HD_720P to listOf(VideoFps.FPS_480)
+            ),
+            activeCameraId = "0",
+            lensOptions = listOf(
+                LensOption("cam2", "0.6×", 1f, 13, cameraId = "2", kind = LensKind.ULTRA_WIDE),
+                LensOption("cam0", "1×", 1f, 24, cameraId = "0", kind = LensKind.MAIN),
+                LensOption("z2.0", "2×", 2f, 48, cameraId = null, kind = LensKind.TELE)
+            )
+        )
+        vm.setAppMode(AppMode.CINE_VIDEO)
+        vm.onCapabilities(caps)
+        assertEquals(VideoResolution.UHD_4K, vm.uiState.value.videoResolution)
+        assertEquals(VideoFps.FPS_30, vm.uiState.value.videoFps)
+        assertTrue(VideoFps.FPS_240.isHighSpeed)
+        assertEquals(8, VideoFps.FPS_240.slowMotionFactor)
+
+        // 240 fps is only possible at 1080p: the resolution follows the frame rate.
+        vm.setVideoFps(VideoFps.FPS_240)
+        assertEquals(VideoFps.FPS_240, vm.uiState.value.videoFps)
+        assertEquals(VideoResolution.FHD_1080P, vm.uiState.value.videoResolution)
+        assertTrue(vm.uiState.value.isSlowMotionMode)
+        assertTrue(vm.uiState.value.bindKey.slowMotion)
+
+        // Back to 4K: 240 is impossible there, so the frame rate drops to the best standard one.
+        vm.setVideoResolution(VideoResolution.UHD_4K)
+        assertEquals(VideoFps.FPS_30, vm.uiState.value.videoFps)
+        assertFalse(vm.uiState.value.isSlowMotionMode)
+
+        // 960 fps is not offered anywhere on this camera.
+        vm.setVideoFps(VideoFps.FPS_960)
+        assertEquals(VideoFps.FPS_30, vm.uiState.value.videoFps)
+        assertEquals(listOf(VideoResolution.FHD_1080P), caps.resolutionsFor(VideoFps.FPS_120))
+
+        // Lens pills: the main camera at 1× is selected; the ultra-wide switches the camera id.
+        assertEquals("cam0", vm.uiState.value.selectedLensId)
+        vm.selectLens(caps.lensOptions.first { it.id == "cam2" })
+        assertEquals("2", vm.uiState.value.activeCameraId)
+        assertEquals("2", vm.uiState.value.bindKey.cameraId)
+        vm.toggleFrontCamera()
+        assertNull(vm.uiState.value.activeCameraId)
     }
 }

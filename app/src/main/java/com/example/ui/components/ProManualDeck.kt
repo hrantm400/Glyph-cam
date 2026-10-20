@@ -63,6 +63,7 @@ import com.example.model.GridOverlayMode
 import com.example.model.IntervalCount
 import com.example.model.IntervalSpacing
 import com.example.model.JpegQuality
+import com.example.model.LensKind
 import com.example.model.LensOption
 import com.example.model.PhotoAspect
 import com.example.model.PhotoDriveMode
@@ -111,6 +112,7 @@ class CameraDeckActions(
     val setDynamicRange: (VideoDynamicRange) -> Unit,
     val setStabilization: (Boolean) -> Unit,
     val setVideoBitrate: (VideoBitrate) -> Unit,
+    val setSlowMotion: (Boolean) -> Unit,
     val setAnamorphic: (AnamorphicDeSqueeze) -> Unit,
     val setAspectGuide: (FrameAspectGuide) -> Unit,
     val setPeaking: (FocusPeakingColor) -> Unit,
@@ -373,10 +375,10 @@ fun TopTelemetryHudBar(
                     onClick = { actions.openQuickSetting(QuickSetting.RESOLUTION) }
                 )
                 HudQuickChip(
-                    title = "КАДРЫ/С",
-                    value = state.videoFps.label,
+                    title = if (state.videoFps.isHighSpeed) "SLOW-MO" else "КАДРЫ/С",
+                    value = if (state.videoFps.isHighSpeed) "${state.videoFps.label} ×${state.videoFps.slowMotionFactor}" else state.videoFps.label,
                     active = true,
-                    accentColor = ScopeGreen,
+                    accentColor = if (state.videoFps.isHighSpeed) ScopeMagenta else ScopeGreen,
                     tag = "chip_video_fps",
                     open = open == QuickSetting.FPS,
                     onClick = { actions.openQuickSetting(QuickSetting.FPS) }
@@ -618,6 +620,31 @@ fun QuickSettingSheet(
                         )
                         SheetHint(state.capturePriority.descRu + if (!state.capabilities.zslSupported) " · ZSL эта камера не поддерживает" else "")
                     }
+                    QuickSetting.FPS -> {
+                        val options = quickOptions(setting, state, actions)
+                        OptionRow(caption = "К/С", options = options)
+                        if (state.videoFps.isHighSpeed) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OptionRow(
+                                caption = "ЗАПИСЬ",
+                                options = listOf(
+                                    QuickOption("Замедленно ×${state.videoFps.slowMotionFactor}", "30 к/с в файле", state.slowMotion) { actions.setSlowMotion(true) },
+                                    QuickOption("Реальное время", "${state.videoFps.fps} к/с в файле", !state.slowMotion) { actions.setSlowMotion(false) }
+                                )
+                            )
+                            SheetHint("Slow-motion идёт через высокоскоростную сессию: без скопов, HDR и ручной экспозиции. Разрешение переключается на поддерживаемое автоматически.")
+                        } else {
+                            val caps = state.capabilities
+                            val hs = VideoFps.entries.filter { it.isHighSpeed && caps.resolutionsFor(it).isNotEmpty() }
+                            SheetHint(
+                                when {
+                                    caps.cameraLabel.isEmpty() -> "Список уточнится после запуска камеры: телефон сам сообщает, какие частоты и разрешения умеет."
+                                    hs.isEmpty() -> "Эта камера не поддерживает высокоскоростную съёмку (120 к/с и выше)."
+                                    else -> "Slow-motion: " + hs.joinToString(", ") { f -> "${f.fps} к/с (${caps.resolutionsFor(f).joinToString("/") { it.label }})" }
+                                }
+                            )
+                        }
+                    }
                     else -> {
                         val options = quickOptions(setting, state, actions)
                         OptionRow(caption = null, options = options)
@@ -727,10 +754,24 @@ private fun quickOptions(setting: QuickSetting, state: ProCameraUiState, actions
             }
         }
         QuickSetting.RESOLUTION -> VideoResolution.entries.map { v ->
-            QuickOption(v.label, v.dimensions, state.videoResolution == v, unknownCamera || caps.videoResolutions.contains(v)) { actions.setVideoResolution(v) }
+            val maxStd = caps.fpsFor(v).filter { !it.isHighSpeed }.maxOfOrNull { it.fps }
+            val maxHs = caps.fpsFor(v).filter { it.isHighSpeed }.maxOfOrNull { it.fps }
+            val sub = buildString {
+                append(v.dimensions)
+                if (!unknownCamera && maxStd != null) append(" · до $maxStd к/с")
+                if (!unknownCamera && maxHs != null) append(" · slow-mo $maxHs")
+            }
+            QuickOption(v.label, sub, state.videoResolution == v, unknownCamera || caps.videoResolutions.contains(v)) { actions.setVideoResolution(v) }
         }
         QuickSetting.FPS -> VideoFps.entries.map { v ->
-            QuickOption(v.label, "${v.fps} к/с", state.videoFps == v, unknownCamera || caps.videoFps.contains(v)) { actions.setVideoFps(v) }
+            val where = caps.resolutionsFor(v)
+            val sub = when {
+                unknownCamera -> if (v.isHighSpeed) "slow-mo ×${v.slowMotionFactor}" else "к/с"
+                where.isEmpty() -> "нет"
+                v.isHighSpeed -> "slow-mo · " + where.joinToString("/") { it.label }
+                else -> where.joinToString("/") { it.label }
+            }
+            QuickOption(v.label, sub, state.videoFps == v, unknownCamera || where.isNotEmpty()) { actions.setVideoFps(v) }
         }
         QuickSetting.DYNAMIC_RANGE -> VideoDynamicRange.entries.map { v ->
             QuickOption(v.label, v.descRu, state.videoDynamicRange == v, v == VideoDynamicRange.SDR || caps.hdrVideo) { actions.setDynamicRange(v) }
@@ -836,15 +877,17 @@ fun LensTurretRow(
             }
             lenses.forEach { lens ->
                 val selected = state.selectedLensId == lens.id
-                Box(
+                val code = lens.kind.code
+                Column(
                     modifier = Modifier
                         .clip(PillShape)
                         .background(if (selected) NothingRed else NothingSurface)
                         .border(1.dp, if (selected) NothingRed else NothingBorder, PillShape)
                         .clickable { actions.selectLens(lens) }
-                        .padding(horizontal = 11.dp, vertical = 7.dp)
+                        .padding(horizontal = 11.dp, vertical = if (code.isEmpty()) 7.dp else 4.dp)
+                        .semantics(mergeDescendants = true) {}
                         .testTag("lens_btn_${lens.id}"),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         text = lens.label,
@@ -853,6 +896,17 @@ fun LensTurretRow(
                         maxLines = 1,
                         softWrap = false
                     )
+                    if (code.isNotEmpty()) {
+                        Text(
+                            text = code,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            lineHeight = 10.sp,
+                            color = if (selected) NothingWhite.copy(alpha = 0.85f) else NothingSilver,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                 }
             }
         }

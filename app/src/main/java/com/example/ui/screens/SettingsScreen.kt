@@ -26,10 +26,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.model.AntiBanding
+import com.example.model.AudioSourceOption
 import com.example.model.CapturePriority
 import com.example.model.JpegQuality
 import com.example.model.PhotoAspect
 import com.example.model.ProcessingMode
+import com.example.model.RecordingLimit
 import com.example.model.VideoBitrate
 import com.example.ui.components.ChipShape
 import com.example.ui.components.CodeBadge
@@ -53,6 +55,8 @@ fun SettingsScreen(
     onCapturePriority: (CapturePriority) -> Unit,
     onPhotoAspect: (PhotoAspect) -> Unit,
     onVideoBitrate: (VideoBitrate) -> Unit,
+    onAudioSource: (AudioSourceOption) -> Unit,
+    onRecordingLimit: (RecordingLimit) -> Unit,
     onAntiBanding: (AntiBanding) -> Unit,
     onNoiseReduction: (ProcessingMode) -> Unit,
     onEdgeMode: (ProcessingMode) -> Unit,
@@ -115,7 +119,7 @@ fun SettingsScreen(
             )
             SwitchSetting(
                 title = "Зеркалить селфи",
-                hint = "Фронтальная камера сохраняет кадр таким, каким вы видите его на экране",
+                hint = "Фронтальная камера сохраняет фото и видео такими, какими вы видите их на экране",
                 checked = state.mirrorSelfie,
                 onToggle = onToggleMirror,
                 tag = "switch_mirror_selfie"
@@ -127,6 +131,21 @@ fun SettingsScreen(
                 title = "Битрейт",
                 hint = "АВТО подбирает битрейт под разрешение и частоту кадров; выше битрейт — чище картинка и больше файл",
                 choices = VideoBitrate.entries.map { v -> Choice(v.label, state.videoBitrate == v) { onVideoBitrate(v) } }
+            )
+            ChoiceSetting(
+                title = "Микрофон",
+                hint = state.audioSource.descRu,
+                choices = AudioSourceOption.entries.map { v -> Choice(v.labelRu, state.audioSource == v) { onAudioSource(v) } }
+            )
+            ChoiceSetting(
+                title = "Лимит записи",
+                hint = "Запись останавливается сама и файл сохраняется, когда время вышло",
+                choices = RecordingLimit.entries.map { v -> Choice(v.label, state.recordingLimit == v) { onRecordingLimit(v) } }
+            )
+            Text(
+                text = "Частота кадров, slow-motion (120–960 к/с) и разрешение выбираются на чипах над видоискателем: телефон сам сообщает, какие сочетания умеет.",
+                style = MaterialTheme.typography.bodySmall,
+                color = NothingSilver
             )
         }
 

@@ -2,10 +2,12 @@ package com.example.data
 
 import android.content.Context
 import com.example.model.AntiBanding
+import com.example.model.AudioSourceOption
 import com.example.model.CapturePriority
 import com.example.model.JpegQuality
 import com.example.model.PhotoAspect
 import com.example.model.ProcessingMode
+import com.example.model.RecordingLimit
 import com.example.model.VideoBitrate
 
 /** Settings that survive restarts. Kept tiny on purpose: SharedPreferences, one key per field. */
@@ -22,7 +24,10 @@ data class UserSettings(
     val mirrorSelfie: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val bakeLutIntoPhotos: Boolean = true,
-    val keepScreenOn: Boolean = true
+    val keepScreenOn: Boolean = true,
+    val audioSource: AudioSourceOption = AudioSourceOption.CAMCORDER,
+    val recordingLimit: RecordingLimit = RecordingLimit.NONE,
+    val slowMotion: Boolean = true
 ) {
     companion object {
         private const val PREFS = "glyphcam_settings"
@@ -44,7 +49,10 @@ data class UserSettings(
                 mirrorSelfie = p.getBoolean("mirrorSelfie", true),
                 hapticsEnabled = p.getBoolean("hapticsEnabled", true),
                 bakeLutIntoPhotos = p.getBoolean("bakeLut", true),
-                keepScreenOn = p.getBoolean("keepScreenOn", true)
+                keepScreenOn = p.getBoolean("keepScreenOn", true),
+                audioSource = enumOf("audioSource", AudioSourceOption.CAMCORDER, AudioSourceOption.values()),
+                recordingLimit = enumOf("recordingLimit", RecordingLimit.NONE, RecordingLimit.values()),
+                slowMotion = p.getBoolean("slowMotion", true)
             )
         }
     }
@@ -64,6 +72,9 @@ data class UserSettings(
             .putBoolean("hapticsEnabled", hapticsEnabled)
             .putBoolean("bakeLut", bakeLutIntoPhotos)
             .putBoolean("keepScreenOn", keepScreenOn)
+            .putString("audioSource", audioSource.name)
+            .putString("recordingLimit", recordingLimit.name)
+            .putBoolean("slowMotion", slowMotion)
             .apply()
     }
 }

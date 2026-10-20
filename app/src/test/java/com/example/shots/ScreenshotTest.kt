@@ -63,6 +63,12 @@ class ScreenshotTest {
             vm.openQuickSetting(QuickSetting.INTERVAL)
         }
         capture("7_QUICK_SHEET_INTERVAL")
-        rule.runOnIdle { vm.setPhotoAspect(PhotoAspect.FULL_4_3) }
+        rule.runOnIdle {
+            vm.setPhotoAspect(PhotoAspect.FULL_4_3)
+            vm.setAppMode(AppMode.CINE_VIDEO)
+            vm.openQuickSetting(QuickSetting.FPS)
+        }
+        capture("8_QUICK_SHEET_FPS")
+        rule.runOnIdle { vm.openQuickSetting(QuickSetting.FPS) }
     }
 }
