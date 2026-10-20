@@ -6,13 +6,19 @@ import android.content.pm.PackageManager
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.View
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,7 +42,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -62,6 +71,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -69,6 +80,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -94,6 +106,8 @@ import com.example.ui.components.LensTurretRow
 import com.example.ui.components.ManualDialDrawer
 import com.example.ui.components.ParameterStrip
 import com.example.ui.components.PillShape
+import com.example.ui.components.QuickSettingSheet
+import com.example.ui.components.StatusDot
 import com.example.ui.components.TopTelemetryHudBar
 import com.example.ui.components.ViewfinderOpticalOverlays
 import com.example.ui.components.rememberMediaThumbnail
@@ -107,10 +121,12 @@ import com.example.ui.theme.NothingWhite
 import com.example.ui.theme.ScopeAmber
 import com.example.ui.theme.ScopeCyan
 import com.example.ui.theme.ScopeGreen
+import com.example.ui.theme.ScopeMagenta
 import com.example.viewmodel.ProCameraUiState
 import com.example.viewmodel.ProCameraViewModel
 import com.example.viewmodel.isCameraMode
 import kotlinx.coroutines.delay
+import kotlin.math.ln
 
 private val ViewfinderShape = RoundedCornerShape(20.dp)
 
@@ -196,24 +212,41 @@ fun GlyphCamStudioScreen(
         if (hasCameraPermission) viewModel.bindCamera(lifecycleOwner, previewView) else requestPermissions()
     }
 
+    val rootView = LocalView.current
+    LaunchedEffect(state.keepScreenOn) {
+        rootView.keepScreenOn = state.keepScreenOn
+    }
+
     val actions = remember(viewModel) {
         CameraDeckActions(
-            cyclePhotoFormat = viewModel::cyclePhotoFormat,
-            cyclePhotoDrive = viewModel::cyclePhotoDrive,
-            cycleSelfTimer = viewModel::cycleSelfTimer,
-            cycleFlash = viewModel::cycleFlash,
-            cycleVideoResolution = viewModel::cycleVideoResolution,
-            cycleVideoFps = viewModel::cycleVideoFps,
-            cycleDynamicRange = viewModel::cycleDynamicRange,
-            toggleStabilization = viewModel::toggleStabilization,
-            cycleAnamorphic = viewModel::cycleAnamorphicDeSqueeze,
-            cycleAspectGuide = viewModel::cycleAspectGuide,
-            cycleZebra = viewModel::cycleZebraThreshold,
-            cyclePeaking = viewModel::cycleFocusPeaking,
+            openQuickSetting = viewModel::openQuickSetting,
+            openSettings = { viewModel.setAppMode(AppMode.SETTINGS) },
+            setPhotoFormat = viewModel::setPhotoFormat,
+            setPhotoDrive = viewModel::setPhotoDrive,
+            setSelfTimer = viewModel::setSelfTimer,
+            setFlash = viewModel::setFlash,
+            setPhotoAspect = viewModel::setPhotoAspect,
+            setSceneExtension = viewModel::selectSceneExtension,
+            setJpegQuality = viewModel::setJpegQuality,
+            setCapturePriority = viewModel::setCapturePriority,
+            setVideoResolution = viewModel::setVideoResolution,
+            setVideoFps = viewModel::setVideoFps,
+            setDynamicRange = viewModel::setDynamicRange,
+            setStabilization = viewModel::setStabilization,
+            setVideoBitrate = viewModel::setVideoBitrate,
+            setAnamorphic = viewModel::setAnamorphic,
+            setAspectGuide = viewModel::setAspectGuide,
+            setPeaking = viewModel::setFocusPeaking,
+            setZebra = viewModel::setZebraThreshold,
+            setGrid = viewModel::setGridOverlay,
+            setIntervalSpacing = viewModel::setIntervalSpacing,
+            setIntervalCount = viewModel::setIntervalCount,
             toggleFalseColor = viewModel::toggleFalseColor,
-            cycleGrid = viewModel::cycleGridOverlay,
             toggleHorizon = viewModel::toggleHorizonLevel,
             toggleAeAfLock = { viewModel.toggleAeAfLock(previewView) },
+            toggleAeLock = viewModel::toggleAeLock,
+            toggleAwbLock = viewModel::toggleAwbLock,
+            toggleFocusMagnifier = viewModel::toggleFocusMagnifier,
             selectLens = viewModel::selectLens,
             toggleFrontCamera = viewModel::toggleFrontCamera,
             toggleDialTab = viewModel::toggleDialTab,
@@ -295,6 +328,26 @@ fun GlyphCamStudioScreen(
                     modifier = studioModifier
                 )
             }
+            AppMode.SETTINGS -> {
+                SettingsScreen(
+                    state = state,
+                    onJpegQuality = viewModel::setJpegQuality,
+                    onCapturePriority = viewModel::setCapturePriority,
+                    onPhotoAspect = viewModel::setPhotoAspect,
+                    onVideoBitrate = viewModel::setVideoBitrate,
+                    onAntiBanding = viewModel::setAntiBanding,
+                    onNoiseReduction = viewModel::setNoiseReduction,
+                    onEdgeMode = viewModel::setEdgeMode,
+                    onToggleShutterSound = viewModel::toggleShutterSound,
+                    onToggleVolumeKeys = viewModel::toggleVolumeKeyShutter,
+                    onToggleMirror = viewModel::toggleMirrorSelfie,
+                    onToggleHaptics = viewModel::toggleHaptics,
+                    onToggleKeepScreenOn = viewModel::toggleKeepScreenOn,
+                    onToggleBakeLut = viewModel::toggleBakeLut,
+                    onBackToCamera = backToCamera,
+                    modifier = studioModifier
+                )
+            }
         }
     }
 }
@@ -343,6 +396,7 @@ private fun CameraWorkspace(
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
         ) {
+            QuickSettingSheet(state = state, actions = actions)
             ManualDialDrawer(state = state, actions = actions)
             LensTurretRow(state = state, actions = actions)
             Spacer(modifier = Modifier.height(8.dp))
@@ -353,7 +407,9 @@ private fun CameraWorkspace(
                 lastShot = shots.firstOrNull(),
                 shotCount = shots.size,
                 onSelectMode = viewModel::setAppMode,
-                onShutterTrigger = viewModel::triggerShutter
+                onShutterTrigger = viewModel::triggerShutter,
+                onPauseResume = viewModel::togglePauseRecording,
+                onSnapshot = { viewModel.snapshotWhileRecording(previewView) }
             )
         }
     }
@@ -375,15 +431,19 @@ private fun Viewfinder(
     val cameraReady = state.cameraStatus is CameraStatus.Ready
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        // Sensor-shaped frame (4:3 photo, 16:9 video) that fits inside the available area.
+        // Frame shaped like the output (4:3, 16:9 or 1:1 photo, 16:9 video) that fits the available area.
         Box(
             modifier = Modifier
-                .aspectRatio(if (state.isVideoMode) 9f / 16f else 3f / 4f)
+                .aspectRatio(state.viewfinderAspect)
                 .clip(ViewfinderShape)
                 .background(NothingObsidian)
                 .border(
                     width = if (state.isRecording) 2.dp else 1.dp,
-                    color = if (state.isRecording) NothingRed else NothingBorder.copy(alpha = 0.6f),
+                    color = when {
+                        state.isRecording && state.isRecordingPaused -> ScopeAmber
+                        state.isRecording -> NothingRed
+                        else -> NothingBorder.copy(alpha = 0.6f)
+                    },
                     shape = ViewfinderShape
                 )
                 .pointerInput(Unit) {
@@ -496,6 +556,20 @@ private fun Viewfinder(
                 )
             }
 
+            ViewfinderBadges(
+                state = state,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp)
+            )
+
+            ZoomRulerOverlay(
+                state = state,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 92.dp)
+            )
+
             ViewfinderBottomStrip(
                 state = state,
                 presets = presets,
@@ -503,6 +577,7 @@ private fun Viewfinder(
                 onToggleHistogram = viewModel::toggleHistogram,
                 onToggleWaveform = viewModel::toggleWaveform,
                 onToggleVectorscope = viewModel::toggleVectorscope,
+                onToggleMagnifier = viewModel::toggleFocusMagnifier,
                 onOpenLutLab = { viewModel.setAppMode(AppMode.LUT_LAB) },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
@@ -516,7 +591,9 @@ private fun Viewfinder(
  */
 @Composable
 private fun CameraPreviewLayer(previewView: PreviewView, state: ProCameraUiState) {
-    val scaleX = state.anamorphicDeSqueeze.scaleX
+    // Focus magnifier is a pure preview punch-in: the capture pipeline is untouched.
+    val magnifier = if (state.focusMagnifier) 2f else 1f
+    val scaleX = state.anamorphicDeSqueeze.scaleX * magnifier
     val lutFilter: ColorMatrixColorFilter? = remember(
         state.activeLut, state.userContrast, state.userSaturation, state.shadowLift, state.highlightRollOff
     ) {
@@ -526,6 +603,7 @@ private fun CameraPreviewLayer(previewView: PreviewView, state: ProCameraUiState
         factory = { previewView },
         update = { pv ->
             if (pv.scaleX != scaleX) pv.scaleX = scaleX
+            if (pv.scaleY != magnifier) pv.scaleY = magnifier
             if (pv.tag !== lutFilter) {
                 pv.tag = lutFilter
                 if (lutFilter != null) {
@@ -685,9 +763,19 @@ private fun ViewfinderBottomStrip(
     onToggleHistogram: () -> Unit,
     onToggleWaveform: () -> Unit,
     onToggleVectorscope: () -> Unit,
+    onToggleMagnifier: () -> Unit,
     onOpenLutLab: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Messages fade after a few seconds; the camera's ready line stays as a quiet fallback.
+    var bannerVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(state.statusBanner) {
+        bannerVisible = state.statusBanner.isNotEmpty()
+        if (bannerVisible) {
+            delay(3500)
+            bannerVisible = false
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -720,6 +808,7 @@ private fun ViewfinderBottomStrip(
             MiniTogglePill("HIST", state.showHistogramRgb, ScopeGreen, onToggleHistogram)
             MiniTogglePill("WFM", state.showWaveformScope, ScopeGreen, onToggleWaveform)
             MiniTogglePill("VEC", state.showVectorscope, ScopeCyan, onToggleVectorscope)
+            MiniTogglePill("ЛУПА", state.focusMagnifier, ScopeAmber, onToggleMagnifier)
 
             presets.take(4).forEach { preset ->
                 Box(
@@ -737,15 +826,12 @@ private fun ViewfinderBottomStrip(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
+        val readyLine = (state.cameraStatus as? CameraStatus.Ready)?.detail ?: ""
+        val showMessage = bannerVisible && state.statusBanner.isNotEmpty()
         Text(
-            text = state.statusBanner.ifEmpty {
-                when (val s = state.cameraStatus) {
-                    is CameraStatus.Ready -> s.detail
-                    else -> ""
-                }
-            },
+            text = if (showMessage) state.statusBanner else readyLine,
             style = MaterialTheme.typography.labelSmall,
-            color = NothingSilver,
+            color = if (showMessage) NothingWhite else NothingSilver.copy(alpha = 0.8f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.testTag("status_banner")
@@ -779,18 +865,36 @@ private fun ShutterDeckRow(
     lastShot: CapturedShotEntity?,
     shotCount: Int,
     onSelectMode: (AppMode) -> Unit,
-    onShutterTrigger: () -> Unit
+    onShutterTrigger: () -> Unit,
+    onPauseResume: () -> Unit,
+    onSnapshot: () -> Unit
 ) {
+    // Icons follow the device orientation so the deck reads correctly in landscape.
+    val targetRotation = if (state.deviceRotationDeg == 270) -90f else state.deviceRotationDeg.toFloat()
+    val rotation by animateFloatAsState(targetValue = targetRotation, label = "deckRotation")
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            ArchiveTile(
-                lastShot = lastShot,
-                count = shotCount,
-                onClick = { onSelectMode(AppMode.MEDIA_VAULT) }
-            )
+            if (state.isRecording) {
+                DeckQuickTile(
+                    icon = if (state.isRecordingPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    title = "ЗАПИСЬ",
+                    value = if (state.isRecordingPaused) "ДАЛЕЕ" else "ПАУЗА",
+                    accent = ScopeAmber,
+                    onClick = onPauseResume,
+                    tag = "btn_pause_resume",
+                    rotation = rotation
+                )
+            } else {
+                ArchiveTile(
+                    lastShot = lastShot,
+                    count = shotCount,
+                    onClick = { onSelectMode(AppMode.MEDIA_VAULT) },
+                    rotation = rotation
+                )
+            }
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -800,19 +904,32 @@ private fun ShutterDeckRow(
         }
 
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            val glyphOn = state.glyphConnected && state.activeGlyphSegments.isNotEmpty()
-            DeckQuickTile(
-                icon = Icons.Default.FlashOn,
-                title = "GLYPH",
-                value = when {
-                    !state.glyphSupported -> "—"
-                    !state.glyphConnected -> "OFF"
-                    else -> "${state.activeGlyphSegments.size}/11"
-                },
-                accent = if (glyphOn) ScopeAmber else NothingSilver,
-                onClick = { onSelectMode(AppMode.GLYPH_STUDIO) },
-                tag = "btn_open_glyph_studio"
-            )
+            if (state.isRecording) {
+                DeckQuickTile(
+                    icon = Icons.Default.CameraAlt,
+                    title = "СТОП-КАДР",
+                    value = "ФОТО",
+                    accent = NothingWhite,
+                    onClick = onSnapshot,
+                    tag = "btn_snapshot",
+                    rotation = rotation
+                )
+            } else {
+                val glyphOn = state.glyphConnected && state.activeGlyphSegments.isNotEmpty()
+                DeckQuickTile(
+                    icon = Icons.Default.FlashOn,
+                    title = "GLYPH",
+                    value = when {
+                        !state.glyphSupported -> "—"
+                        !state.glyphConnected -> "OFF"
+                        else -> "${state.activeGlyphSegments.size}/11"
+                    },
+                    accent = if (glyphOn) ScopeAmber else NothingSilver,
+                    onClick = { onSelectMode(AppMode.GLYPH_STUDIO) },
+                    tag = "btn_open_glyph_studio",
+                    rotation = rotation
+                )
+            }
         }
     }
 }
@@ -821,7 +938,8 @@ private fun ShutterDeckRow(
 private fun ArchiveTile(
     lastShot: CapturedShotEntity?,
     count: Int,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    rotation: Float = 0f
 ) {
     val thumb by rememberMediaThumbnail(uri = lastShot?.uri, isVideo = lastShot?.isVideo == true, sizePx = 160)
     Column(
@@ -837,6 +955,7 @@ private fun ArchiveTile(
         Box(
             modifier = Modifier
                 .size(34.dp)
+                .rotate(rotation)
                 .clip(RoundedCornerShape(8.dp))
                 .background(NothingObsidian),
             contentAlignment = Alignment.Center
@@ -933,6 +1052,7 @@ private fun ShutterButton(
 ) {
     val ready = state.cameraStatus is CameraStatus.Ready
     val busy = state.isCapturing || state.timerCountdown > 0
+    val intervalActive = state.intervalRunning
     Box(
         modifier = Modifier
             .size(78.dp)
@@ -950,6 +1070,30 @@ private fun ShutterButton(
                     .clip(if (state.isRecording) RoundedCornerShape(6.dp) else CircleShape)
                     .background(if (ready) NothingRed else NothingRed.copy(alpha = 0.4f))
             )
+            intervalActive -> Box(
+                modifier = Modifier
+                    .size(58.dp)
+                    .clip(CircleShape)
+                    .background(ScopeAmber.copy(alpha = 0.9f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(NothingBlack)
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = state.intervalProgressLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = NothingBlack,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
             busy -> Box(
                 modifier = Modifier
                     .size(58.dp)
@@ -992,7 +1136,8 @@ private fun DeckQuickTile(
     value: String,
     accent: Color,
     onClick: () -> Unit,
-    tag: String
+    tag: String,
+    rotation: Float = 0f
 ) {
     Column(
         modifier = Modifier
@@ -1004,9 +1149,127 @@ private fun DeckQuickTile(
             .testTag(tag),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(imageVector = icon, contentDescription = title, tint = accent, modifier = Modifier.size(18.dp))
+        Icon(
+            imageVector = icon,
+            contentDescription = title,
+            tint = accent,
+            modifier = Modifier
+                .size(18.dp)
+                .rotate(rotation)
+        )
         Spacer(modifier = Modifier.height(3.dp))
         Text(text = value, style = MaterialTheme.typography.labelLarge, color = NothingWhite)
         Text(text = title, style = MaterialTheme.typography.labelSmall, color = NothingSilver)
+    }
+}
+
+/** Small state badges in the viewfinder corner: interval progress, pause, scene mode, magnifier, locks. */
+@Composable
+private fun ViewfinderBadges(state: ProCameraUiState, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (state.intervalRunning) {
+            ViewfinderBadge(
+                text = "ИНТЕРВАЛ ${state.intervalProgressLabel} · ${state.intervalSpacing.label}",
+                color = ScopeAmber,
+                tag = "badge_interval"
+            )
+        }
+        if (state.isRecording && state.isRecordingPaused) {
+            ViewfinderBadge(text = "ПАУЗА · ${state.formattedTimecode}", color = ScopeAmber, tag = "badge_paused")
+        }
+        if (state.isExtensionActive) {
+            ViewfinderBadge(text = state.sceneExtension.labelRu.uppercase(), color = ScopeMagenta, tag = "badge_scene")
+        }
+        if (state.focusMagnifier) {
+            ViewfinderBadge(text = "ЛУПА ×2 · ТОЛЬКО ПРЕВЬЮ", color = ScopeAmber, tag = "badge_magnifier")
+        }
+        if (state.aeLocked || state.awbLocked) {
+            ViewfinderBadge(
+                text = listOfNotNull(if (state.aeLocked) "AE-L" else null, if (state.awbLocked) "AWB-L" else null).joinToString(" · "),
+                color = ScopeCyan,
+                tag = "badge_locks"
+            )
+        }
+    }
+}
+
+@Composable
+private fun ViewfinderBadge(text: String, color: Color, tag: String) {
+    Row(
+        modifier = Modifier
+            .clip(ChipShape)
+            .background(NothingBlack.copy(alpha = 0.72f))
+            .border(1.dp, color.copy(alpha = 0.8f), ChipShape)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        StatusDot(color = color, size = 6.dp)
+        Text(text = text, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1)
+    }
+}
+
+/** Logarithmic zoom ruler with a tick per real lens; shows for a moment after any zoom change. */
+@Composable
+private fun ZoomRulerOverlay(state: ProCameraUiState, modifier: Modifier = Modifier) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(state.zoomRulerUntilMs) {
+        val remaining = state.zoomRulerUntilMs - SystemClock.elapsedRealtime()
+        if (remaining > 0L) {
+            visible = true
+            delay(remaining)
+        }
+        visible = false
+    }
+    AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+        val caps = state.capabilities
+        val minZ = caps.minZoom.coerceAtLeast(0.1f)
+        val maxZ = caps.maxZoom.coerceAtLeast(minZ * 1.1f)
+        fun frac(z: Float): Float = (ln((z / minZ).toDouble()) / ln((maxZ / minZ).toDouble())).toFloat().coerceIn(0f, 1f)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.78f)
+                .clip(ChipShape)
+                .background(NothingBlack.copy(alpha = 0.62f))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .testTag("zoom_ruler"),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = state.zoomLabel,
+                style = MaterialTheme.typography.displayLarge,
+                fontSize = 22.sp,
+                lineHeight = 24.sp,
+                color = ScopeAmber
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            val lensTicks = caps.lensOptions.map { frac(it.zoomRatio) }
+            val current = frac(state.zoomRatio)
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(22.dp)
+            ) {
+                val w = size.width
+                val y = size.height / 2f
+                drawLine(NothingSilver, Offset(0f, y), Offset(w, y), strokeWidth = 1.dp.toPx())
+                for (i in 0..24) {
+                    val x = w * i / 24f
+                    val h = if (i % 4 == 0) 5.dp.toPx() else 3.dp.toPx()
+                    drawLine(NothingSilver.copy(alpha = 0.7f), Offset(x, y - h), Offset(x, y + h), strokeWidth = 1f)
+                }
+                lensTicks.forEach { f ->
+                    val x = w * f
+                    drawLine(NothingWhite, Offset(x, y - 8.dp.toPx()), Offset(x, y + 8.dp.toPx()), strokeWidth = 2.dp.toPx())
+                }
+                val cx = w * current
+                drawLine(ScopeAmber, Offset(cx, 0f), Offset(cx, size.height), strokeWidth = 3.dp.toPx())
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = String.format(java.util.Locale.US, "%.1f×", minZ), style = MaterialTheme.typography.labelSmall, color = NothingSilver)
+                Text(text = String.format(java.util.Locale.US, "%.0f×", maxZ), style = MaterialTheme.typography.labelSmall, color = NothingSilver)
+            }
+        }
     }
 }

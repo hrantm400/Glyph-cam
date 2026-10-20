@@ -3,6 +3,7 @@ package com.example.viewmodel
 import android.app.Application
 import android.net.Uri
 import android.os.SystemClock
+import android.view.Surface
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
@@ -12,26 +13,36 @@ import com.example.data.CameraPresetEntity
 import com.example.data.CameraRepository
 import com.example.data.CapturedShotEntity
 import com.example.data.GlyphCamDatabase
+import com.example.data.UserSettings
 import com.example.glyph.GlyphBridge
 import com.example.model.AnamorphicDeSqueeze
+import com.example.model.AntiBanding
 import com.example.model.AppMode
 import com.example.model.AwbPreset
 import com.example.model.CameraCapabilities
 import com.example.model.CameraStatus
+import com.example.model.CapturePriority
 import com.example.model.FlashMode
 import com.example.model.FocusPeakingColor
 import com.example.model.FocusPullPoint
 import com.example.model.FrameAspectGuide
 import com.example.model.GlyphLightingMode
 import com.example.model.GridOverlayMode
+import com.example.model.IntervalCount
+import com.example.model.IntervalSpacing
+import com.example.model.JpegQuality
 import com.example.model.LensOption
 import com.example.model.LiveExposureInfo
 import com.example.model.LiveScopeTelemetry
 import com.example.model.LutProfile
+import com.example.model.PhotoAspect
 import com.example.model.PhotoDriveMode
 import com.example.model.PhotoFormat
+import com.example.model.ProcessingMode
+import com.example.model.SceneExtension
 import com.example.model.SavedCapture
 import com.example.model.SelfTimer
+import com.example.model.VideoBitrate
 import com.example.model.VideoDynamicRange
 import com.example.model.VideoFps
 import com.example.model.VideoResolution
@@ -59,6 +70,27 @@ enum class ManualDialTab(val labelRu: String) {
     AUDIO("Звук")
 }
 
+/** A HUD chip whose options open as a labelled sheet instead of blind cycling. */
+enum class QuickSetting(val titleRu: String) {
+    PHOTO_FORMAT("Формат файла"),
+    DRIVE("Режим съёмки"),
+    INTERVAL("Интервальная съёмка"),
+    TIMER("Автоспуск"),
+    FLASH("Вспышка"),
+    ASPECT("Формат кадра"),
+    SCENE("Сцена и обработка"),
+    QUALITY("Качество и приоритет"),
+    RESOLUTION("Разрешение видео"),
+    FPS("Частота кадров"),
+    DYNAMIC_RANGE("Динамический диапазон"),
+    BITRATE("Битрейт видео"),
+    DESQUEEZE("Анаморфотный де-сквиз"),
+    GUIDE("Рамка кадра"),
+    PEAKING("Пикинг фокуса"),
+    ZEBRA("Зебра"),
+    GRID("Сетка")
+}
+
 val AppMode.isCameraMode: Boolean
     get() = this == AppMode.PHOTO_PRO || this == AppMode.CINE_VIDEO
 
@@ -70,7 +102,12 @@ data class CameraBindKey(
     val videoResolution: VideoResolution,
     val videoFps: VideoFps,
     val dynamicRange: VideoDynamicRange,
-    val stabilization: Boolean
+    val stabilization: Boolean,
+    val photoAspect: PhotoAspect,
+    val jpegQuality: JpegQuality,
+    val capturePriority: CapturePriority,
+    val videoBitrate: VideoBitrate,
+    val sceneExtension: SceneExtension
 )
 
 data class ProCameraUiState(
@@ -161,14 +198,55 @@ data class ProCameraUiState(
     val recordingElapsedMs: Long = 0L,
     val shutterFlashTrigger: Long = 0L,
     val statusBanner: String = "",
-    val inspectShot: CapturedShotEntity? = null
+    val inspectShot: CapturedShotEntity? = null,
+
+    // Pro pack
+    val photoAspect: PhotoAspect = PhotoAspect.FULL_4_3,
+    val jpegQuality: JpegQuality = JpegQuality.Q95,
+    val capturePriority: CapturePriority = CapturePriority.QUALITY,
+    val sceneExtension: SceneExtension = SceneExtension.NONE,
+    val intervalSpacing: IntervalSpacing = IntervalSpacing.S2,
+    val intervalCount: IntervalCount = IntervalCount.C30,
+    val intervalShotsTaken: Int = 0,
+    val intervalRunning: Boolean = false,
+    val videoBitrate: VideoBitrate = VideoBitrate.AUTO,
+    val isRecordingPaused: Boolean = false,
+    val aeLocked: Boolean = false,
+    val awbLocked: Boolean = false,
+    val antiBanding: AntiBanding = AntiBanding.AUTO,
+    val noiseReduction: ProcessingMode = ProcessingMode.AUTO,
+    val edgeMode: ProcessingMode = ProcessingMode.AUTO,
+    val focusMagnifier: Boolean = false,
+    val shutterSound: Boolean = true,
+    val volumeKeyShutter: Boolean = true,
+    val mirrorSelfie: Boolean = true,
+    val hapticsEnabled: Boolean = true,
+    val keepScreenOn: Boolean = true,
+    val quickSetting: QuickSetting? = null,
+    val zoomRulerUntilMs: Long = 0L,
+    val deviceRotationDeg: Int = 0
 ) {
     val isVideoMode: Boolean get() = activeMode == AppMode.CINE_VIDEO
     val cameraMode: AppMode get() = if (activeMode.isCameraMode) activeMode else lastCameraMode
     val isManualExposure: Boolean get() = isoValue > 0 || shutterNs > 0L
 
     val bindKey: CameraBindKey
-        get() = CameraBindKey(cameraMode, useFrontCamera, photoFormat, videoResolution, videoFps, videoDynamicRange, stabilization)
+        get() = CameraBindKey(
+            cameraMode, useFrontCamera, photoFormat, videoResolution, videoFps, videoDynamicRange, stabilization,
+            photoAspect, jpegQuality, capturePriority, videoBitrate, if (cameraMode == AppMode.CINE_VIDEO) SceneExtension.NONE else sceneExtension
+        )
+
+    /** Width / height of the viewfinder box. */
+    val viewfinderAspect: Float
+        get() = if (cameraMode == AppMode.CINE_VIDEO) 9f / 16f else 1f / photoAspect.ratio
+
+    /** A vendor scene mode is running: the camera owns exposure, focus and processing. */
+    val isExtensionActive: Boolean
+        get() = cameraMode != AppMode.CINE_VIDEO && sceneExtension != SceneExtension.NONE &&
+            capabilities.availableExtensions.contains(sceneExtension)
+
+    val intervalProgressLabel: String
+        get() = if (intervalCount.count > 0) "$intervalShotsTaken / ${intervalCount.count}" else "$intervalShotsTaken"
 
     val formattedTimecode: String
         get() {
@@ -260,6 +338,26 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     private var lastGlyphProgressMs = 0L
 
     init {
+        val settings = UserSettings.load(application)
+        _uiState.update {
+            it.copy(
+                jpegQuality = settings.jpegQuality,
+                capturePriority = settings.capturePriority,
+                photoAspect = settings.photoAspect,
+                videoBitrate = settings.videoBitrate,
+                antiBanding = settings.antiBanding,
+                noiseReduction = settings.noiseReduction,
+                edgeMode = settings.edgeMode,
+                shutterSound = settings.shutterSound,
+                volumeKeyShutter = settings.volumeKeyShutter,
+                mirrorSelfie = settings.mirrorSelfie,
+                hapticsEnabled = settings.hapticsEnabled,
+                bakeLutIntoPhotos = settings.bakeLutIntoPhotos,
+                keepScreenOn = settings.keepScreenOn
+            )
+        }
+        controller.shutterSoundEnabled = settings.shutterSound
+        controller.hapticsEnabled = settings.hapticsEnabled
         val db = GlyphCamDatabase.getInstance(application)
         repository = CameraRepository(db.cameraDao())
         presets = repository.presets.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -287,7 +385,12 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 videoResolution = s.videoResolution,
                 fps = s.videoFps,
                 dynamicRange = s.videoDynamicRange,
-                stabilization = s.stabilization
+                stabilization = s.stabilization,
+                jpegQuality = s.jpegQuality.value,
+                capturePriority = s.capturePriority,
+                photoAspect = s.photoAspect,
+                videoBitrateMbps = s.videoBitrate.mbps,
+                extension = s.bindKey.sceneExtension
             )
         )
     }
@@ -323,9 +426,35 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 torch = s.glyphTorchHardwareSync,
                 flash = s.flashMode,
                 zebraIre = s.zebraThreshold.irePercent,
-                isVideo = s.cameraMode == AppMode.CINE_VIDEO
+                isVideo = s.cameraMode == AppMode.CINE_VIDEO,
+                aeLock = s.aeLocked,
+                awbLock = s.awbLocked,
+                antiBanding = s.antiBanding,
+                noiseReduction = s.noiseReduction,
+                edgeMode = s.edgeMode
             )
         )
+    }
+
+    private fun persistSettings() {
+        val s = _uiState.value
+        UserSettings(
+            jpegQuality = s.jpegQuality,
+            capturePriority = s.capturePriority,
+            photoAspect = s.photoAspect,
+            videoBitrate = s.videoBitrate,
+            antiBanding = s.antiBanding,
+            noiseReduction = s.noiseReduction,
+            edgeMode = s.edgeMode,
+            shutterSound = s.shutterSound,
+            volumeKeyShutter = s.volumeKeyShutter,
+            mirrorSelfie = s.mirrorSelfie,
+            hapticsEnabled = s.hapticsEnabled,
+            bakeLutIntoPhotos = s.bakeLutIntoPhotos,
+            keepScreenOn = s.keepScreenOn
+        ).save(getApplication())
+        controller.shutterSoundEnabled = s.shutterSound
+        controller.hapticsEnabled = s.hapticsEnabled
     }
 
     private fun pushGlyph() {
@@ -371,13 +500,38 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 videoFps = if (capabilities.videoFps.contains(s.videoFps)) s.videoFps else capabilities.videoFps.first(),
                 videoDynamicRange = if (capabilities.hdrVideo) s.videoDynamicRange else VideoDynamicRange.SDR,
                 flashMode = if (capabilities.hasFlash) s.flashMode else FlashMode.OFF,
-                evCompensation = if (capabilities.evRange > 0f) s.evCompensation.coerceIn(-capabilities.evRange, capabilities.evRange) else 0f
+                evCompensation = if (capabilities.evRange > 0f) s.evCompensation.coerceIn(-capabilities.evRange, capabilities.evRange) else 0f,
+                sceneExtension = if (capabilities.availableExtensions.contains(s.sceneExtension)) s.sceneExtension else SceneExtension.NONE,
+                antiBanding = if (capabilities.antiBandingModes.contains(s.antiBanding)) s.antiBanding else AntiBanding.AUTO,
+                noiseReduction = if (capabilities.noiseReductionModes.contains(s.noiseReduction)) s.noiseReduction else ProcessingMode.AUTO,
+                edgeMode = if (capabilities.edgeModes.contains(s.edgeMode)) s.edgeMode else ProcessingMode.AUTO
             )
         }
     }
 
     override fun onZoomChanged(ratio: Float, minRatio: Float, maxRatio: Float) {
-        _uiState.update { it.copy(zoomRatio = ratio) }
+        _uiState.update {
+            val moved = kotlin.math.abs(it.zoomRatio - ratio) > 0.01f
+            it.copy(zoomRatio = ratio, zoomRulerUntilMs = if (moved) SystemClock.elapsedRealtime() + 1600L else it.zoomRulerUntilMs)
+        }
+    }
+
+    override fun onIntervalProgress(shotsTaken: Int, totalShots: Int, running: Boolean) {
+        _uiState.update { it.copy(intervalShotsTaken = shotsTaken, intervalRunning = running) }
+    }
+
+    override fun onRecordingPaused(paused: Boolean) {
+        _uiState.update { it.copy(isRecordingPaused = paused, statusBanner = if (paused) "Запись на паузе" else "Запись продолжается") }
+    }
+
+    override fun onDeviceRotation(surfaceRotation: Int) {
+        val degrees = when (surfaceRotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        _uiState.update { it.copy(deviceRotationDeg = degrees) }
     }
 
     override fun onTelemetry(telemetry: LiveScopeTelemetry) {
@@ -493,10 +647,20 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 activeMode = mode,
                 lastCameraMode = if (mode.isCameraMode) mode else it.lastCameraMode,
-                selectedDialTab = if (mode.isCameraMode) it.selectedDialTab else null
+                selectedDialTab = if (mode.isCameraMode) it.selectedDialTab else null,
+                quickSetting = null,
+                focusMagnifier = false
             )
         }
         refreshAudioMeter()
+    }
+
+    /** Volume keys act as a shutter release when enabled in settings. Returns true when consumed. */
+    fun onVolumeKey(): Boolean {
+        val s = _uiState.value
+        if (!s.volumeKeyShutter || !s.activeMode.isCameraMode) return false
+        triggerShutter()
+        return true
     }
 
     fun triggerShutter() {
@@ -508,16 +672,246 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
         if (s.isVideoMode) {
             controller.toggleRecording(s.audioEnabled)
         } else {
+            val wasInterval = controller.isIntervalRunning
             val started = controller.capturePhoto(
                 ProCameraController.PhotoRequest(
                     drive = s.photoDriveMode,
                     timerSeconds = s.selfTimer.seconds,
                     lutMatrix = if (s.bakeLutIntoPhotos) s.lutColorMatrix else null,
-                    lutCode = s.activeLut.code
+                    lutCode = s.activeLut.code,
+                    intervalSeconds = s.intervalSpacing.seconds,
+                    intervalCount = s.intervalCount.count,
+                    mirrorFront = s.mirrorSelfie
                 )
             )
-            if (!started) _uiState.update { it.copy(statusBanner = "Таймер отменён", timerCountdown = 0) }
+            if (!started && !wasInterval) _uiState.update { it.copy(statusBanner = "Таймер отменён", timerCountdown = 0) }
         }
+    }
+
+    fun togglePauseRecording() {
+        if (!_uiState.value.isRecording) return
+        controller.pauseResumeRecording()
+    }
+
+    /** Still frame from the live preview while a video is being recorded. */
+    fun snapshotWhileRecording(previewView: PreviewView) {
+        val s = _uiState.value
+        controller.snapshotFromPreview(previewView, if (s.bakeLutIntoPhotos) s.lutColorMatrix else null)
+    }
+
+    fun toggleFocusMagnifier() {
+        _uiState.update {
+            it.copy(
+                focusMagnifier = !it.focusMagnifier,
+                statusBanner = if (!it.focusMagnifier) "Лупа фокуса ×2 (только превью)" else "Лупа выключена"
+            )
+        }
+    }
+
+    fun toggleAeLock() {
+        _uiState.update { s ->
+            if (s.isManualExposure) return@update s.copy(statusBanner = "Экспозиция уже ручная, блокировка AE не нужна")
+            s.copy(aeLocked = !s.aeLocked, statusBanner = if (!s.aeLocked) "Экспозиция заблокирована" else "Блокировка экспозиции снята")
+        }
+        pushParams()
+    }
+
+    fun toggleAwbLock() {
+        _uiState.update { s ->
+            if (s.awbPreset != AwbPreset.AUTO) return@update s.copy(statusBanner = "Баланс белого уже задан вручную")
+            s.copy(awbLocked = !s.awbLocked, statusBanner = if (!s.awbLocked) "Баланс белого заблокирован" else "Блокировка баланса белого снята")
+        }
+        pushParams()
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Quick settings (labelled option sheets) and direct setters
+    // ------------------------------------------------------------------------------------------
+
+    fun openQuickSetting(setting: QuickSetting?) {
+        _uiState.update {
+            it.copy(quickSetting = if (it.quickSetting == setting) null else setting, selectedDialTab = if (setting != null) null else it.selectedDialTab)
+        }
+    }
+
+    fun setPhotoFormat(format: PhotoFormat) {
+        _uiState.update { s ->
+            if (!s.capabilities.photoFormats.contains(format)) return@update s.copy(statusBanner = "${format.label}: камера не поддерживает")
+            s.copy(photoFormat = format, statusBanner = "Формат: ${format.label} · ${format.descRu}")
+        }
+    }
+
+    fun setPhotoDrive(mode: PhotoDriveMode) {
+        _uiState.update { it.copy(photoDriveMode = mode, statusBanner = mode.labelRu) }
+    }
+
+    fun setSelfTimer(timer: SelfTimer) {
+        _uiState.update { it.copy(selfTimer = timer, statusBanner = if (timer == SelfTimer.OFF) "Таймер выключен" else "Таймер ${timer.seconds} с") }
+    }
+
+    fun setFlash(mode: FlashMode) {
+        _uiState.update { s ->
+            if (!s.capabilities.hasFlash) return@update s.copy(statusBanner = "У этой камеры нет вспышки")
+            s.copy(flashMode = mode, statusBanner = "Вспышка: ${mode.labelRu}")
+        }
+        pushParams()
+    }
+
+    fun setPhotoAspect(aspect: PhotoAspect) {
+        _uiState.update { it.copy(photoAspect = aspect, statusBanner = "Кадр ${aspect.label} · ${aspect.descRu}") }
+        persistSettings()
+    }
+
+    fun setJpegQuality(quality: JpegQuality) {
+        _uiState.update { it.copy(jpegQuality = quality, statusBanner = "Качество JPEG ${quality.label}") }
+        persistSettings()
+    }
+
+    fun setCapturePriority(priority: CapturePriority) {
+        _uiState.update { s ->
+            if (priority == CapturePriority.ZERO_LAG && !s.capabilities.zslSupported) {
+                return@update s.copy(statusBanner = "ZSL не поддерживается этой камерой")
+            }
+            s.copy(capturePriority = priority, statusBanner = "Приоритет: ${priority.labelRu} · ${priority.descRu}")
+        }
+        persistSettings()
+    }
+
+    fun selectSceneExtension(extension: SceneExtension) {
+        _uiState.update { s ->
+            if (extension != SceneExtension.NONE && !s.capabilities.availableExtensions.contains(extension)) {
+                return@update s.copy(statusBanner = "Режим «${extension.labelRu}» недоступен на этой камере")
+            }
+            s.copy(
+                sceneExtension = extension,
+                isoValue = if (extension == SceneExtension.NONE) s.isoValue else 0,
+                shutterNs = if (extension == SceneExtension.NONE) s.shutterNs else 0L,
+                manualFocusDiopters = if (extension == SceneExtension.NONE) s.manualFocusDiopters else null,
+                selectedDialTab = if (extension == SceneExtension.NONE) s.selectedDialTab else null,
+                aeLocked = false,
+                awbLocked = false,
+                statusBanner = if (extension == SceneExtension.NONE) "Обычный режим: ручное управление доступно"
+                else "${extension.labelRu}: ${extension.descRu}"
+            )
+        }
+    }
+
+    fun setVideoResolution(resolution: VideoResolution) {
+        _uiState.update { s ->
+            if (!s.capabilities.videoResolutions.contains(resolution)) return@update s.copy(statusBanner = "${resolution.label}: не поддерживается")
+            s.copy(videoResolution = resolution, statusBanner = "Разрешение: ${resolution.label} (${resolution.dimensions})")
+        }
+    }
+
+    fun setVideoFps(fps: VideoFps) {
+        _uiState.update { s ->
+            if (!s.capabilities.videoFps.contains(fps)) return@update s.copy(statusBanner = "${fps.fps} к/с: не поддерживается")
+            val ns = if (s.shutterNs > 0L && s.useShutterAngleInVideo) {
+                (1_000_000_000.0 * s.shutterAngleDeg / (360.0 * fps.fps)).toLong()
+            } else s.shutterNs
+            s.copy(videoFps = fps, shutterNs = ns, statusBanner = "Частота кадров: ${fps.fps} к/с")
+        }
+        pushParams()
+    }
+
+    fun setDynamicRange(range: VideoDynamicRange) {
+        _uiState.update { s ->
+            if (range == VideoDynamicRange.HLG_10 && !s.capabilities.hdrVideo) return@update s.copy(statusBanner = "HDR-видео не поддерживается этой камерой")
+            s.copy(videoDynamicRange = range, statusBanner = "${range.label} · ${range.descRu}")
+        }
+    }
+
+    fun setStabilization(enabled: Boolean) {
+        _uiState.update { s ->
+            if (enabled && !s.capabilities.videoStabilization && !s.capabilities.previewStabilization) {
+                return@update s.copy(statusBanner = "Стабилизация недоступна на этой камере")
+            }
+            s.copy(stabilization = enabled, statusBanner = if (enabled) "Стабилизация включена" else "Стабилизация выключена")
+        }
+    }
+
+    fun setVideoBitrate(bitrate: VideoBitrate) {
+        _uiState.update { it.copy(videoBitrate = bitrate, statusBanner = "Битрейт: ${bitrate.label}") }
+        persistSettings()
+    }
+
+    fun setAnamorphic(value: AnamorphicDeSqueeze) {
+        _uiState.update { it.copy(anamorphicDeSqueeze = value, statusBanner = "Де-сквиз превью: ${value.descRu}") }
+    }
+
+    fun setAspectGuide(value: FrameAspectGuide) {
+        _uiState.update { it.copy(aspectGuide = value, statusBanner = "Рамка: ${value.descRu}") }
+    }
+
+    fun setFocusPeaking(value: FocusPeakingColor) {
+        _uiState.update { it.copy(focusPeakingColor = value, statusBanner = if (value == FocusPeakingColor.OFF) "Пикинг выключен" else "Пикинг: ${value.labelRu.lowercase()}") }
+    }
+
+    fun setZebraThreshold(value: ZebraThreshold) {
+        _uiState.update { it.copy(zebraThreshold = value, statusBanner = if (value == ZebraThreshold.OFF) "Зебра выключена" else "Зебра от ${value.label}") }
+        pushParams()
+    }
+
+    fun setGridOverlay(value: GridOverlayMode) {
+        _uiState.update { it.copy(gridOverlayMode = value, statusBanner = "Сетка: ${value.labelRu}") }
+    }
+
+    fun setIntervalSpacing(value: IntervalSpacing) {
+        _uiState.update { it.copy(intervalSpacing = value, photoDriveMode = PhotoDriveMode.INTERVAL, statusBanner = "Интервал ${value.label}") }
+    }
+
+    fun setIntervalCount(value: IntervalCount) {
+        _uiState.update {
+            it.copy(
+                intervalCount = value,
+                photoDriveMode = PhotoDriveMode.INTERVAL,
+                statusBanner = if (value.count > 0) "Серия из ${value.count} кадров" else "Серия до остановки"
+            )
+        }
+    }
+
+    // Persistent preferences (settings screen)
+    fun setAntiBanding(value: AntiBanding) {
+        _uiState.update { it.copy(antiBanding = value, statusBanner = "Антимерцание: ${value.labelRu}") }
+        pushParams()
+        persistSettings()
+    }
+
+    fun setNoiseReduction(value: ProcessingMode) {
+        _uiState.update { it.copy(noiseReduction = value, statusBanner = "Шумоподавление: ${value.labelRu}") }
+        pushParams()
+        persistSettings()
+    }
+
+    fun setEdgeMode(value: ProcessingMode) {
+        _uiState.update { it.copy(edgeMode = value, statusBanner = "Резкость: ${value.labelRu}") }
+        pushParams()
+        persistSettings()
+    }
+
+    fun toggleShutterSound() {
+        _uiState.update { it.copy(shutterSound = !it.shutterSound) }
+        persistSettings()
+    }
+
+    fun toggleVolumeKeyShutter() {
+        _uiState.update { it.copy(volumeKeyShutter = !it.volumeKeyShutter) }
+        persistSettings()
+    }
+
+    fun toggleMirrorSelfie() {
+        _uiState.update { it.copy(mirrorSelfie = !it.mirrorSelfie) }
+        persistSettings()
+    }
+
+    fun toggleHaptics() {
+        _uiState.update { it.copy(hapticsEnabled = !it.hapticsEnabled) }
+        persistSettings()
+    }
+
+    fun toggleKeepScreenOn() {
+        _uiState.update { it.copy(keepScreenOn = !it.keepScreenOn) }
+        persistSettings()
     }
 
     fun toggleFrontCamera() {
@@ -526,7 +920,10 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
                 useFrontCamera = !it.useFrontCamera,
                 manualFocusDiopters = null,
                 tapFocusNormalized = null,
-                aeAfLocked = false
+                aeAfLocked = false,
+                aeLocked = false,
+                awbLocked = false,
+                focusMagnifier = false
             )
         }
     }
@@ -593,11 +990,11 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     // ------------------------------------------------------------------------------------------
 
     fun toggleDialTab(tab: ManualDialTab) {
-        _uiState.update { it.copy(selectedDialTab = if (it.selectedDialTab == tab) null else tab) }
+        _uiState.update { it.copy(selectedDialTab = if (it.selectedDialTab == tab) null else tab, quickSetting = null) }
     }
 
     fun setIso(iso: Int) {
-        _uiState.update { it.copy(isoValue = iso) }
+        _uiState.update { it.copy(isoValue = iso, aeLocked = if (iso > 0) false else it.aeLocked) }
         pushParams()
     }
 
@@ -632,7 +1029,7 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setWhiteBalance(preset: AwbPreset) {
-        _uiState.update { it.copy(awbPreset = preset, statusBanner = "Баланс белого: ${preset.labelRu}") }
+        _uiState.update { it.copy(awbPreset = preset, awbLocked = false, statusBanner = "Баланс белого: ${preset.labelRu}") }
         pushParams()
     }
 
@@ -884,6 +1281,7 @@ class ProCameraViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun toggleBakeLut() {
         _uiState.update { it.copy(bakeLutIntoPhotos = !it.bakeLutIntoPhotos) }
+        persistSettings()
     }
 
     fun resetColorGrade() {

@@ -8,7 +8,8 @@ enum class AppMode(val titleRu: String, val badgeCode: String) {
     CINE_VIDEO("Видео", "ВИДЕО"),
     GLYPH_STUDIO("Glyph-студия", "GLYPH"),
     LUT_LAB("LUT и цвет", "LUT"),
-    MEDIA_VAULT("Архив", "АРХИВ")
+    MEDIA_VAULT("Архив", "АРХИВ"),
+    SETTINGS("Настройки", "НАСТР")
 }
 
 /**
@@ -34,7 +35,76 @@ enum class PhotoFormat(val label: String, val badge: String, val descRu: String)
 enum class PhotoDriveMode(val labelRu: String, val code: String, val shots: Int) {
     SINGLE("Одиночный кадр", "1", 1),
     BURST_5("Серия из 5 кадров", "×5", 5),
-    AEB_3("Брекетинг ±2 EV", "AEB", 3)
+    AEB_3("Брекетинг ±2 EV", "AEB", 3),
+    FOCUS_STACK_5("Стекинг фокуса ×5", "STACK", 5),
+    INTERVAL("Интервальная съёмка", "INT", 0)
+}
+
+/** Output aspect of photos. 16:9 is a native sensor stream; 1:1 is a WYSIWYG crop. */
+enum class PhotoAspect(val label: String, val ratio: Float, val descRu: String) {
+    FULL_4_3("4:3", 4f / 3f, "Полный кадр сенсора"),
+    WIDE_16_9("16:9", 16f / 9f, "Широкий кадр"),
+    SQUARE_1_1("1:1", 1f, "Квадрат")
+}
+
+enum class CapturePriority(val labelRu: String, val code: String, val descRu: String) {
+    QUALITY("Качество", "HQ", "Максимальная детализация, чуть дольше"),
+    SPEED("Скорость", "FAST", "Минимальная задержка затвора"),
+    ZERO_LAG("Без задержки", "ZSL", "Кадр из буфера в момент нажатия")
+}
+
+enum class JpegQuality(val value: Int, val label: String) {
+    Q85(85, "85"),
+    Q95(95, "95"),
+    Q100(100, "100")
+}
+
+enum class VideoBitrate(val mbps: Int, val label: String) {
+    AUTO(0, "АВТО"),
+    M35(35, "35 Мбит/с"),
+    M70(70, "70 Мбит/с"),
+    M120(120, "120 Мбит/с")
+}
+
+/** Values are the Camera2 CONTROL_AE_ANTIBANDING_MODE constants. */
+enum class AntiBanding(val labelRu: String, val camera2Mode: Int) {
+    AUTO("Авто", 3),
+    HZ_50("50 Гц", 1),
+    HZ_60("60 Гц", 2),
+    OFF("Выкл", 0)
+}
+
+/** Values are the Camera2 NOISE_REDUCTION_MODE / EDGE_MODE constants; AUTO leaves the key unset. */
+enum class ProcessingMode(val labelRu: String, val camera2Mode: Int) {
+    AUTO("Авто", -1),
+    OFF("Выкл", 0),
+    FAST("Быстро", 1),
+    HIGH_QUALITY("Макс. качество", 2)
+}
+
+enum class IntervalSpacing(val seconds: Int, val label: String) {
+    S1(1, "1 с"),
+    S2(2, "2 с"),
+    S5(5, "5 с"),
+    S10(10, "10 с"),
+    S30(30, "30 с")
+}
+
+enum class IntervalCount(val count: Int, val label: String) {
+    C10(10, "10"),
+    C30(30, "30"),
+    C100(100, "100"),
+    UNTIL_STOPPED(0, "∞")
+}
+
+/** CameraX vendor extensions; [extensionMode] mirrors androidx.camera.extensions.ExtensionMode. */
+enum class SceneExtension(val labelRu: String, val code: String, val extensionMode: Int, val descRu: String) {
+    NONE("Обычный", "STD", 0, "Полный ручной контроль"),
+    NIGHT("Ночь", "NIGHT", 3, "Многокадровая ночная обработка производителя"),
+    HDR("HDR", "HDR", 2, "Расширенный динамический диапазон"),
+    BOKEH("Портрет", "BOKEH", 1, "Размытие фона"),
+    FACE_RETOUCH("Ретушь", "FACE", 4, "Сглаживание кожи"),
+    AUTO("Авто-сцена", "AUTO", 5, "Камера сама выбирает обработку")
 }
 
 enum class SelfTimer(val seconds: Int, val label: String) {
@@ -320,7 +390,12 @@ data class CameraCapabilities(
     val sensorMegapixels: Float = 0f,
     val apertureLabel: String = "",
     val focalEquivMm: Int = 0,
-    val lensOptions: List<LensOption> = emptyList()
+    val lensOptions: List<LensOption> = emptyList(),
+    val zslSupported: Boolean = false,
+    val antiBandingModes: Set<AntiBanding> = setOf(AntiBanding.AUTO),
+    val noiseReductionModes: Set<ProcessingMode> = setOf(ProcessingMode.AUTO),
+    val edgeModes: Set<ProcessingMode> = setOf(ProcessingMode.AUTO),
+    val availableExtensions: Set<SceneExtension> = setOf(SceneExtension.NONE)
 ) {
     val evRange: Float get() = if (evStep > 0f) evIndexMax * evStep else 0f
 }

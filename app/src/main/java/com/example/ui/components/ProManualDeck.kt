@@ -1,6 +1,11 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -25,14 +30,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,15 +55,24 @@ import androidx.compose.ui.unit.sp
 import com.example.model.AnamorphicDeSqueeze
 import com.example.model.AwbPreset
 import com.example.model.CameraStatus
+import com.example.model.CapturePriority
 import com.example.model.FlashMode
 import com.example.model.FocusPeakingColor
 import com.example.model.FrameAspectGuide
 import com.example.model.GridOverlayMode
+import com.example.model.IntervalCount
+import com.example.model.IntervalSpacing
+import com.example.model.JpegQuality
 import com.example.model.LensOption
+import com.example.model.PhotoAspect
 import com.example.model.PhotoDriveMode
 import com.example.model.PhotoFormat
+import com.example.model.SceneExtension
 import com.example.model.SelfTimer
+import com.example.model.VideoBitrate
 import com.example.model.VideoDynamicRange
+import com.example.model.VideoFps
+import com.example.model.VideoResolution
 import com.example.model.ZebraThreshold
 import com.example.ui.theme.NothingBlack
 import com.example.ui.theme.NothingBorder
@@ -68,8 +85,10 @@ import com.example.ui.theme.NothingWhite
 import com.example.ui.theme.ScopeAmber
 import com.example.ui.theme.ScopeCyan
 import com.example.ui.theme.ScopeGreen
+import com.example.ui.theme.ScopeMagenta
 import com.example.viewmodel.ManualDialTab
 import com.example.viewmodel.ProCameraUiState
+import com.example.viewmodel.QuickSetting
 import com.example.viewmodel.formatExposure
 import java.util.Locale
 import kotlin.math.abs
@@ -77,22 +96,34 @@ import kotlin.math.roundToInt
 
 /** Every control callback of the camera deck in one place, so the composables stay readable. */
 class CameraDeckActions(
-    val cyclePhotoFormat: () -> Unit,
-    val cyclePhotoDrive: () -> Unit,
-    val cycleSelfTimer: () -> Unit,
-    val cycleFlash: () -> Unit,
-    val cycleVideoResolution: () -> Unit,
-    val cycleVideoFps: () -> Unit,
-    val cycleDynamicRange: () -> Unit,
-    val toggleStabilization: () -> Unit,
-    val cycleAnamorphic: () -> Unit,
-    val cycleAspectGuide: () -> Unit,
-    val cycleZebra: () -> Unit,
-    val cyclePeaking: () -> Unit,
+    val openQuickSetting: (QuickSetting) -> Unit,
+    val openSettings: () -> Unit,
+    val setPhotoFormat: (PhotoFormat) -> Unit,
+    val setPhotoDrive: (PhotoDriveMode) -> Unit,
+    val setSelfTimer: (SelfTimer) -> Unit,
+    val setFlash: (FlashMode) -> Unit,
+    val setPhotoAspect: (PhotoAspect) -> Unit,
+    val setSceneExtension: (SceneExtension) -> Unit,
+    val setJpegQuality: (JpegQuality) -> Unit,
+    val setCapturePriority: (CapturePriority) -> Unit,
+    val setVideoResolution: (VideoResolution) -> Unit,
+    val setVideoFps: (VideoFps) -> Unit,
+    val setDynamicRange: (VideoDynamicRange) -> Unit,
+    val setStabilization: (Boolean) -> Unit,
+    val setVideoBitrate: (VideoBitrate) -> Unit,
+    val setAnamorphic: (AnamorphicDeSqueeze) -> Unit,
+    val setAspectGuide: (FrameAspectGuide) -> Unit,
+    val setPeaking: (FocusPeakingColor) -> Unit,
+    val setZebra: (ZebraThreshold) -> Unit,
+    val setGrid: (GridOverlayMode) -> Unit,
+    val setIntervalSpacing: (IntervalSpacing) -> Unit,
+    val setIntervalCount: (IntervalCount) -> Unit,
     val toggleFalseColor: () -> Unit,
-    val cycleGrid: () -> Unit,
     val toggleHorizon: () -> Unit,
     val toggleAeAfLock: () -> Unit,
+    val toggleAeLock: () -> Unit,
+    val toggleAwbLock: () -> Unit,
+    val toggleFocusMagnifier: () -> Unit,
     val selectLens: (LensOption) -> Unit,
     val toggleFrontCamera: () -> Unit,
     val toggleDialTab: (ManualDialTab) -> Unit,
@@ -136,7 +167,7 @@ fun TopTelemetryHudBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                StatusDot(color = if (state.isRecording) NothingRed else ScopeGreen)
+                RecordingDot(state = state)
                 if (state.isVideoMode) {
                     Text(
                         text = state.formattedTimecode,
@@ -229,11 +260,31 @@ fun TopTelemetryHudBar(
                     softWrap = false
                 )
             }
+
+            Spacer(modifier = Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(NothingSurface)
+                    .border(1.dp, NothingBorder, CircleShape)
+                    .clickable { actions.openSettings() }
+                    .testTag("btn_open_settings"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "Настройки",
+                    tint = NothingWhite,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Row 2: scrollable quick settings
+        // Row 2: scrollable quick settings. Each chip opens a labelled sheet below the viewfinder.
+        val open = state.quickSetting
         FadingScrollRow(modifier = Modifier.fillMaxWidth(), spacing = 6.dp) {
             if (!state.isVideoMode) {
                 HudQuickChip(
@@ -242,7 +293,28 @@ fun TopTelemetryHudBar(
                     active = state.photoFormat != PhotoFormat.JPEG,
                     accentColor = ScopeCyan,
                     tag = "chip_photo_format",
-                    onClick = actions.cyclePhotoFormat
+                    open = open == QuickSetting.PHOTO_FORMAT,
+                    onClick = { actions.openQuickSetting(QuickSetting.PHOTO_FORMAT) }
+                )
+                HudQuickChip(
+                    title = "КАДР",
+                    value = state.photoAspect.label,
+                    active = state.photoAspect != PhotoAspect.FULL_4_3,
+                    accentColor = NothingWhite,
+                    tag = "chip_photo_aspect",
+                    open = open == QuickSetting.ASPECT,
+                    onClick = { actions.openQuickSetting(QuickSetting.ASPECT) }
+                )
+                val scenes = caps.availableExtensions.size > 1
+                HudQuickChip(
+                    title = "СЦЕНА",
+                    value = if (!scenes) "НЕТ" else state.sceneExtension.code,
+                    active = state.isExtensionActive,
+                    accentColor = ScopeMagenta,
+                    tag = "chip_scene_extension",
+                    enabled = scenes,
+                    open = open == QuickSetting.SCENE,
+                    onClick = { actions.openQuickSetting(QuickSetting.SCENE) }
                 )
                 HudQuickChip(
                     title = "СЕРИЯ",
@@ -250,7 +322,17 @@ fun TopTelemetryHudBar(
                     active = state.photoDriveMode != PhotoDriveMode.SINGLE,
                     accentColor = ScopeAmber,
                     tag = "chip_photo_drive",
-                    onClick = actions.cyclePhotoDrive
+                    open = open == QuickSetting.DRIVE,
+                    onClick = { actions.openQuickSetting(QuickSetting.DRIVE) }
+                )
+                HudQuickChip(
+                    title = "ИНТЕРВАЛ",
+                    value = "${state.intervalSpacing.label} · ${state.intervalCount.label}",
+                    active = state.photoDriveMode == PhotoDriveMode.INTERVAL,
+                    accentColor = ScopeAmber,
+                    tag = "chip_interval",
+                    open = open == QuickSetting.INTERVAL,
+                    onClick = { actions.openQuickSetting(QuickSetting.INTERVAL) }
                 )
                 HudQuickChip(
                     title = "ТАЙМЕР",
@@ -258,7 +340,8 @@ fun TopTelemetryHudBar(
                     active = state.selfTimer != SelfTimer.OFF,
                     accentColor = ScopeGreen,
                     tag = "chip_self_timer",
-                    onClick = actions.cycleSelfTimer
+                    open = open == QuickSetting.TIMER,
+                    onClick = { actions.openQuickSetting(QuickSetting.TIMER) }
                 )
                 HudQuickChip(
                     title = "ВСПЫШКА",
@@ -267,7 +350,17 @@ fun TopTelemetryHudBar(
                     accentColor = ScopeAmber,
                     tag = "chip_flash",
                     enabled = caps.hasFlash,
-                    onClick = actions.cycleFlash
+                    open = open == QuickSetting.FLASH,
+                    onClick = { actions.openQuickSetting(QuickSetting.FLASH) }
+                )
+                HudQuickChip(
+                    title = "КАЧЕСТВО",
+                    value = "${state.jpegQuality.label} · ${state.capturePriority.code}",
+                    active = state.jpegQuality != JpegQuality.Q95 || state.capturePriority != CapturePriority.QUALITY,
+                    accentColor = ScopeCyan,
+                    tag = "chip_quality",
+                    open = open == QuickSetting.QUALITY,
+                    onClick = { actions.openQuickSetting(QuickSetting.QUALITY) }
                 )
             } else {
                 HudQuickChip(
@@ -276,7 +369,8 @@ fun TopTelemetryHudBar(
                     active = true,
                     accentColor = NothingWhite,
                     tag = "chip_video_res",
-                    onClick = actions.cycleVideoResolution
+                    open = open == QuickSetting.RESOLUTION,
+                    onClick = { actions.openQuickSetting(QuickSetting.RESOLUTION) }
                 )
                 HudQuickChip(
                     title = "КАДРЫ/С",
@@ -284,7 +378,8 @@ fun TopTelemetryHudBar(
                     active = true,
                     accentColor = ScopeGreen,
                     tag = "chip_video_fps",
-                    onClick = actions.cycleVideoFps
+                    open = open == QuickSetting.FPS,
+                    onClick = { actions.openQuickSetting(QuickSetting.FPS) }
                 )
                 HudQuickChip(
                     title = "HDR",
@@ -293,7 +388,8 @@ fun TopTelemetryHudBar(
                     accentColor = ScopeCyan,
                     tag = "chip_video_hdr",
                     enabled = caps.hdrVideo,
-                    onClick = actions.cycleDynamicRange
+                    open = open == QuickSetting.DYNAMIC_RANGE,
+                    onClick = { actions.openQuickSetting(QuickSetting.DYNAMIC_RANGE) }
                 )
                 val stabAvailable = caps.videoStabilization || caps.previewStabilization
                 HudQuickChip(
@@ -303,17 +399,51 @@ fun TopTelemetryHudBar(
                     accentColor = ScopeGreen,
                     tag = "chip_stabilization",
                     enabled = stabAvailable,
-                    onClick = actions.toggleStabilization
+                    onClick = { actions.setStabilization(!state.stabilization) }
+                )
+                HudQuickChip(
+                    title = "БИТРЕЙТ",
+                    value = state.videoBitrate.label,
+                    active = state.videoBitrate != VideoBitrate.AUTO,
+                    accentColor = ScopeAmber,
+                    tag = "chip_video_bitrate",
+                    open = open == QuickSetting.BITRATE,
+                    onClick = { actions.openQuickSetting(QuickSetting.BITRATE) }
                 )
             }
 
+            val aeLockPossible = !state.isManualExposure && !state.isExtensionActive
+            HudQuickChip(
+                title = "AE",
+                value = when {
+                    state.isManualExposure -> "MANUAL"
+                    state.aeLocked -> "LOCK"
+                    else -> "AUTO"
+                },
+                active = state.aeLocked,
+                accentColor = ScopeAmber,
+                tag = "chip_ae_lock",
+                enabled = aeLockPossible,
+                onClick = actions.toggleAeLock
+            )
+            val awbLockPossible = state.awbPreset == AwbPreset.AUTO && !state.isExtensionActive
+            HudQuickChip(
+                title = "AWB",
+                value = if (state.awbLocked) "LOCK" else state.awbPreset.code,
+                active = state.awbLocked,
+                accentColor = ScopeCyan,
+                tag = "chip_awb_lock",
+                enabled = awbLockPossible,
+                onClick = actions.toggleAwbLock
+            )
             HudQuickChip(
                 title = "ДЕ-СКВИЗ",
                 value = state.anamorphicDeSqueeze.label,
                 active = state.anamorphicDeSqueeze != AnamorphicDeSqueeze.NONE,
                 accentColor = ScopeAmber,
                 tag = "chip_anamorphic",
-                onClick = actions.cycleAnamorphic
+                open = open == QuickSetting.DESQUEEZE,
+                onClick = { actions.openQuickSetting(QuickSetting.DESQUEEZE) }
             )
             HudQuickChip(
                 title = "РАМКА",
@@ -321,7 +451,8 @@ fun TopTelemetryHudBar(
                 active = state.aspectGuide != FrameAspectGuide.OFF,
                 accentColor = NothingWhite,
                 tag = "chip_aspect_guide",
-                onClick = actions.cycleAspectGuide
+                open = open == QuickSetting.GUIDE,
+                onClick = { actions.openQuickSetting(QuickSetting.GUIDE) }
             )
             HudQuickChip(
                 title = "ПИКИНГ",
@@ -329,7 +460,8 @@ fun TopTelemetryHudBar(
                 active = state.focusPeakingColor != FocusPeakingColor.OFF,
                 accentColor = if (state.focusPeakingColor == FocusPeakingColor.OFF) NothingSilver else state.focusPeakingColor.color,
                 tag = "chip_focus_peaking",
-                onClick = actions.cyclePeaking
+                open = open == QuickSetting.PEAKING,
+                onClick = { actions.openQuickSetting(QuickSetting.PEAKING) }
             )
             HudQuickChip(
                 title = "ЗЕБРА",
@@ -337,7 +469,8 @@ fun TopTelemetryHudBar(
                 active = state.zebraThreshold != ZebraThreshold.OFF,
                 accentColor = ScopeAmber,
                 tag = "chip_zebra",
-                onClick = actions.cycleZebra
+                open = open == QuickSetting.ZEBRA,
+                onClick = { actions.openQuickSetting(QuickSetting.ZEBRA) }
             )
             HudQuickChip(
                 title = "FALSE COLOR",
@@ -353,7 +486,8 @@ fun TopTelemetryHudBar(
                 active = state.gridOverlayMode != GridOverlayMode.NONE,
                 accentColor = NothingWhite,
                 tag = "chip_grid_mode",
-                onClick = actions.cycleGrid
+                open = open == QuickSetting.GRID,
+                onClick = { actions.openQuickSetting(QuickSetting.GRID) }
             )
             HudQuickChip(
                 title = "ГОРИЗОНТ",
@@ -368,6 +502,262 @@ fun TopTelemetryHudBar(
 }
 
 @Composable
+private fun RecordingDot(state: ProCameraUiState) {
+    if (state.isRecording && !state.isRecordingPaused) {
+        val transition = rememberInfiniteTransition(label = "rec")
+        val alpha by transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.15f,
+            animationSpec = infiniteRepeatable(tween(durationMillis = 550), RepeatMode.Reverse),
+            label = "recAlpha"
+        )
+        StatusDot(color = NothingRed.copy(alpha = alpha))
+    } else {
+        StatusDot(
+            color = when {
+                state.isRecording -> ScopeAmber
+                state.cameraStatus is CameraStatus.Ready -> ScopeGreen
+                else -> NothingSilver
+            }
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Quick-setting sheet: labelled options for the chip that is open
+// ---------------------------------------------------------------------------------------------
+
+private class QuickOption(
+    val label: String,
+    val sub: String?,
+    val selected: Boolean,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit
+)
+
+@Composable
+fun QuickSettingSheet(
+    state: ProCameraUiState,
+    actions: CameraDeckActions,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = state.quickSetting != null,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
+        modifier = modifier
+    ) {
+        val setting = state.quickSetting
+        if (setting != null) {
+            NothingCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp)
+                    .testTag("quick_setting_sheet"),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = setting.titleRu.uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = NothingSilver,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Закрыть",
+                        tint = NothingSilver,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { actions.openQuickSetting(setting) }
+                            .testTag("quick_setting_close")
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                when (setting) {
+                    QuickSetting.INTERVAL -> {
+                        OptionRow(
+                            caption = "ИНТЕРВАЛ",
+                            options = IntervalSpacing.entries.map { v ->
+                                QuickOption(v.label, null, state.intervalSpacing == v) { actions.setIntervalSpacing(v) }
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OptionRow(
+                            caption = "КАДРОВ",
+                            options = IntervalCount.entries.map { v ->
+                                QuickOption(v.label, null, state.intervalCount == v) { actions.setIntervalCount(v) }
+                            }
+                        )
+                        SheetHint(
+                            if (state.photoDriveMode == PhotoDriveMode.INTERVAL) "Режим серии: интервальная. Повторное нажатие затвора останавливает съёмку."
+                            else "Выбор интервала или числа кадров включает интервальный режим серии."
+                        )
+                    }
+                    QuickSetting.QUALITY -> {
+                        OptionRow(
+                            caption = "JPEG",
+                            options = JpegQuality.entries.map { v ->
+                                QuickOption(v.label, null, state.jpegQuality == v) { actions.setJpegQuality(v) }
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OptionRow(
+                            caption = "ПРИОРИТЕТ",
+                            options = CapturePriority.entries.map { v ->
+                                QuickOption(
+                                    label = v.labelRu,
+                                    sub = v.code,
+                                    selected = state.capturePriority == v,
+                                    enabled = v != CapturePriority.ZERO_LAG || state.capabilities.zslSupported
+                                ) { actions.setCapturePriority(v) }
+                            }
+                        )
+                        SheetHint(state.capturePriority.descRu + if (!state.capabilities.zslSupported) " · ZSL эта камера не поддерживает" else "")
+                    }
+                    else -> {
+                        val options = quickOptions(setting, state, actions)
+                        OptionRow(caption = null, options = options)
+                        options.firstOrNull { it.selected }?.sub?.let { SheetHint(it) }
+                        if (setting == QuickSetting.SCENE) {
+                            SheetHint("В режимах сцены экспозицию, фокус и обработку ведёт сам производитель камеры; ручные шкалы отключаются.")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionRow(caption: String?, options: List<QuickOption>) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (caption != null) {
+            Text(
+                text = caption,
+                style = MaterialTheme.typography.labelSmall,
+                color = NothingSilver,
+                modifier = Modifier.widthIn(min = 64.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+        }
+        FadingScrollRow(modifier = Modifier.weight(1f), spacing = 6.dp, fade = false) {
+            options.forEach { option -> OptionPill(option) }
+        }
+    }
+}
+
+@Composable
+private fun OptionPill(option: QuickOption) {
+    val bg = when {
+        option.selected -> NothingWhite
+        else -> NothingSurface
+    }
+    val fg = when {
+        option.selected -> NothingBlack
+        !option.enabled -> NothingSilver.copy(alpha = 0.45f)
+        else -> NothingWhite
+    }
+    Column(
+        modifier = Modifier
+            .clip(ChipShape)
+            .background(bg)
+            .border(1.dp, if (option.selected) NothingWhite else NothingBorder, ChipShape)
+            .clickable(enabled = option.enabled) { option.onClick() }
+            .padding(horizontal = 11.dp, vertical = 7.dp)
+            .semantics(mergeDescendants = true) {}
+            .testTag("option_${option.label}"),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = option.label, style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1, softWrap = false)
+        if (option.sub != null) {
+            Text(
+                text = option.sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (option.selected) NothingBlack.copy(alpha = 0.7f) else NothingSilver.copy(alpha = if (option.enabled) 1f else 0.45f),
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+    }
+}
+
+@Composable
+private fun SheetHint(text: String) {
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = NothingSilver,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+private fun quickOptions(setting: QuickSetting, state: ProCameraUiState, actions: CameraDeckActions): List<QuickOption> {
+    val caps = state.capabilities
+    val unknownCamera = caps.cameraLabel.isEmpty()
+    return when (setting) {
+        QuickSetting.PHOTO_FORMAT -> PhotoFormat.entries.map { v ->
+            QuickOption(v.badge, v.descRu, state.photoFormat == v, unknownCamera || caps.photoFormats.contains(v)) { actions.setPhotoFormat(v) }
+        }
+        QuickSetting.DRIVE -> PhotoDriveMode.entries.map { v ->
+            QuickOption(
+                label = v.code,
+                sub = v.labelRu,
+                selected = state.photoDriveMode == v,
+                enabled = v != PhotoDriveMode.FOCUS_STACK_5 || unknownCamera || caps.manualFocus
+            ) { actions.setPhotoDrive(v) }
+        }
+        QuickSetting.TIMER -> SelfTimer.entries.map { v ->
+            QuickOption(v.label, if (v == SelfTimer.OFF) "без задержки" else "${v.seconds} с", state.selfTimer == v) { actions.setSelfTimer(v) }
+        }
+        QuickSetting.FLASH -> FlashMode.entries.map { v ->
+            QuickOption(v.code, v.labelRu, state.flashMode == v, caps.hasFlash) { actions.setFlash(v) }
+        }
+        QuickSetting.ASPECT -> PhotoAspect.entries.map { v ->
+            QuickOption(v.label, v.descRu, state.photoAspect == v) { actions.setPhotoAspect(v) }
+        }
+        QuickSetting.SCENE -> SceneExtension.entries.map { v ->
+            QuickOption(v.labelRu, v.descRu, state.sceneExtension == v, v == SceneExtension.NONE || caps.availableExtensions.contains(v)) {
+                actions.setSceneExtension(v)
+            }
+        }
+        QuickSetting.RESOLUTION -> VideoResolution.entries.map { v ->
+            QuickOption(v.label, v.dimensions, state.videoResolution == v, unknownCamera || caps.videoResolutions.contains(v)) { actions.setVideoResolution(v) }
+        }
+        QuickSetting.FPS -> VideoFps.entries.map { v ->
+            QuickOption(v.label, "${v.fps} к/с", state.videoFps == v, unknownCamera || caps.videoFps.contains(v)) { actions.setVideoFps(v) }
+        }
+        QuickSetting.DYNAMIC_RANGE -> VideoDynamicRange.entries.map { v ->
+            QuickOption(v.label, v.descRu, state.videoDynamicRange == v, v == VideoDynamicRange.SDR || caps.hdrVideo) { actions.setDynamicRange(v) }
+        }
+        QuickSetting.BITRATE -> VideoBitrate.entries.map { v ->
+            QuickOption(v.label, if (v == VideoBitrate.AUTO) "по разрешению" else null, state.videoBitrate == v) { actions.setVideoBitrate(v) }
+        }
+        QuickSetting.DESQUEEZE -> AnamorphicDeSqueeze.entries.map { v ->
+            QuickOption(v.label, v.descRu, state.anamorphicDeSqueeze == v) { actions.setAnamorphic(v) }
+        }
+        QuickSetting.GUIDE -> FrameAspectGuide.entries.map { v ->
+            QuickOption(v.label, v.descRu, state.aspectGuide == v) { actions.setAspectGuide(v) }
+        }
+        QuickSetting.PEAKING -> FocusPeakingColor.entries.map { v ->
+            QuickOption(v.labelRu, null, state.focusPeakingColor == v) { actions.setPeaking(v) }
+        }
+        QuickSetting.ZEBRA -> ZebraThreshold.entries.map { v ->
+            QuickOption(v.label, if (v == ZebraThreshold.OFF) null else "от ${v.label} IRE", state.zebraThreshold == v) { actions.setZebra(v) }
+        }
+        QuickSetting.GRID -> GridOverlayMode.entries.map { v ->
+            QuickOption(v.code, v.labelRu, state.gridOverlayMode == v) { actions.setGrid(v) }
+        }
+        QuickSetting.INTERVAL, QuickSetting.QUALITY -> emptyList()
+    }
+}
+
+@Composable
 private fun HudQuickChip(
     title: String,
     value: String,
@@ -375,15 +765,20 @@ private fun HudQuickChip(
     accentColor: Color,
     tag: String,
     onClick: () -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    open: Boolean = false
 ) {
     Column(
         modifier = Modifier
             .clip(ChipShape)
-            .background(if (active) NothingSurfaceHigh else NothingSurface)
+            .background(if (active || open) NothingSurfaceHigh else NothingSurface)
             .border(
                 width = 1.dp,
-                color = if (active) accentColor.copy(alpha = 0.6f) else NothingBorder.copy(alpha = 0.6f),
+                color = when {
+                    open -> NothingRed
+                    active -> accentColor.copy(alpha = 0.6f)
+                    else -> NothingBorder.copy(alpha = 0.6f)
+                },
                 shape = ChipShape
             )
             .clickable { onClick() }
@@ -501,6 +896,29 @@ fun ParameterStrip(
     modifier: Modifier = Modifier
 ) {
     val isVideo = state.isVideoMode
+    if (state.isExtensionActive) {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .clip(ChipShape)
+                .background(NothingSurface)
+                .border(1.dp, ScopeMagenta.copy(alpha = 0.6f), ChipShape)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .testTag("extension_active_note"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusDot(color = ScopeMagenta)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Режим «${state.sceneExtension.labelRu}»: экспозицию, фокус и обработку ведёт камера. Для ручных шкал выберите «Обычный» в меню СЦЕНА.",
+                style = MaterialTheme.typography.labelSmall,
+                color = NothingSilver,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        return
+    }
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)

@@ -10,6 +10,8 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    // Offline mirror for artifacts the cloud build box cannot fetch through Gradle.
+    maven { url = uri("app/libs/m2") }
   }
 }
 rootProject.name = "GlyphCam"

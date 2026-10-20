@@ -3,10 +3,18 @@ package com.example
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.UserSettings
 import com.example.model.AppMode
 import com.example.model.GlyphLightingMode
+import com.example.model.IntervalCount
+import com.example.model.JpegQuality
 import com.example.model.LutProfile
+import com.example.model.PhotoAspect
+import com.example.model.PhotoDriveMode
+import com.example.model.SceneExtension
+import com.example.model.VideoBitrate
 import com.example.viewmodel.ProCameraViewModel
+import com.example.viewmodel.QuickSetting
 import com.example.viewmodel.formatExposure
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -75,5 +83,53 @@ class ExampleRobolectricTest {
 
         viewModel.setAppMode(AppMode.MEDIA_VAULT)
         assertEquals(AppMode.PHOTO_PRO, viewModel.uiState.value.cameraMode)
+    }
+
+    @Test
+    fun `pro pack settings persist across view models and shape the bind key`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = ProCameraViewModel(app)
+
+        vm.setJpegQuality(JpegQuality.Q100)
+        vm.setPhotoAspect(PhotoAspect.SQUARE_1_1)
+        vm.setVideoBitrate(VideoBitrate.M70)
+        vm.toggleShutterSound()
+        assertEquals(1f, vm.uiState.value.viewfinderAspect)
+        assertEquals(JpegQuality.Q100, vm.uiState.value.bindKey.jpegQuality)
+        assertEquals(PhotoAspect.SQUARE_1_1, vm.uiState.value.bindKey.photoAspect)
+        assertFalse(vm.controller.shutterSoundEnabled)
+
+        val stored = UserSettings.load(app)
+        assertEquals(JpegQuality.Q100, stored.jpegQuality)
+        assertEquals(PhotoAspect.SQUARE_1_1, stored.photoAspect)
+        assertEquals(VideoBitrate.M70, stored.videoBitrate)
+        assertFalse(stored.shutterSound)
+
+        val second = ProCameraViewModel(app)
+        assertEquals(JpegQuality.Q100, second.uiState.value.jpegQuality)
+        assertFalse(second.uiState.value.shutterSound)
+
+        // Interval settings switch the drive mode; the sheet toggles open and closed.
+        vm.setIntervalCount(IntervalCount.C10)
+        assertEquals(PhotoDriveMode.INTERVAL, vm.uiState.value.photoDriveMode)
+        assertEquals("0 / 10", vm.uiState.value.intervalProgressLabel)
+        vm.openQuickSetting(QuickSetting.DRIVE)
+        assertEquals(QuickSetting.DRIVE, vm.uiState.value.quickSetting)
+        vm.openQuickSetting(QuickSetting.DRIVE)
+        assertNull(vm.uiState.value.quickSetting)
+
+        // Scene modes stay off until the camera reports them.
+        vm.selectSceneExtension(SceneExtension.NIGHT)
+        assertEquals(SceneExtension.NONE, vm.uiState.value.sceneExtension)
+        assertFalse(vm.uiState.value.isExtensionActive)
+
+        // Video keeps a 16:9 box whatever the photo aspect is.
+        vm.setAppMode(AppMode.CINE_VIDEO)
+        assertEquals(9f / 16f, vm.uiState.value.viewfinderAspect)
+
+        // Volume keys fire the shutter only while enabled.
+        assertTrue(vm.onVolumeKey())
+        vm.toggleVolumeKeyShutter()
+        assertFalse(vm.onVolumeKey())
     }
 }

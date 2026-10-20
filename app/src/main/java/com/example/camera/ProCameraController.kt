@@ -21,6 +21,7 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaActionSound
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
@@ -34,6 +35,8 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -43,6 +46,7 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalZeroShutterLag
 import androidx.camera.core.DynamicRange
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
@@ -56,6 +60,7 @@ import androidx.camera.core.ZoomState
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
@@ -70,16 +75,21 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
+import com.example.model.AntiBanding
 import com.example.model.AppMode
 import com.example.model.AwbPreset
 import com.example.model.CameraCapabilities
 import com.example.model.CameraStatus
+import com.example.model.CapturePriority
 import com.example.model.FlashMode
 import com.example.model.LensOption
 import com.example.model.LiveExposureInfo
 import com.example.model.LiveScopeTelemetry
+import com.example.model.PhotoAspect
 import com.example.model.PhotoDriveMode
 import com.example.model.PhotoFormat
+import com.example.model.ProcessingMode
+import com.example.model.SceneExtension
 import com.example.model.SavedCapture
 import com.example.model.VideoDynamicRange
 import com.example.model.VideoFps
@@ -112,7 +122,7 @@ import kotlin.math.sqrt
  * real scopes, audio levels and sensor data. Nothing here is simulated: when something is not
  * available the UI is told so.
  */
-@OptIn(ExperimentalCamera2Interop::class)
+@OptIn(ExperimentalCamera2Interop::class, ExperimentalZeroShutterLag::class)
 class ProCameraController(
     private val context: Context,
     private val scope: CoroutineScope,
@@ -133,6 +143,9 @@ class ProCameraController(
         fun onTimerTick(secondsLeft: Int)
         fun onBusy(busy: Boolean)
         fun onMessage(text: String)
+        fun onIntervalProgress(shotsTaken: Int, totalShots: Int, running: Boolean)
+        fun onRecordingPaused(paused: Boolean)
+        fun onDeviceRotation(surfaceRotation: Int)
     }
 
     data class BindRequest(
@@ -142,7 +155,12 @@ class ProCameraController(
         val videoResolution: VideoResolution,
         val fps: VideoFps,
         val dynamicRange: VideoDynamicRange,
-        val stabilization: Boolean
+        val stabilization: Boolean,
+        val jpegQuality: Int = 95,
+        val capturePriority: CapturePriority = CapturePriority.QUALITY,
+        val photoAspect: PhotoAspect = PhotoAspect.FULL_4_3,
+        val videoBitrateMbps: Int = 0, // 0 = let the encoder decide
+        val extension: SceneExtension = SceneExtension.NONE
     )
 
     data class ManualParams(
@@ -154,14 +172,22 @@ class ProCameraController(
         val torch: Boolean,
         val flash: FlashMode,
         val zebraIre: Int?,
-        val isVideo: Boolean
+        val isVideo: Boolean,
+        val aeLock: Boolean = false,
+        val awbLock: Boolean = false,
+        val antiBanding: AntiBanding = AntiBanding.AUTO,
+        val noiseReduction: ProcessingMode = ProcessingMode.AUTO,
+        val edgeMode: ProcessingMode = ProcessingMode.AUTO
     )
 
     data class PhotoRequest(
         val drive: PhotoDriveMode,
         val timerSeconds: Int,
         val lutMatrix: FloatArray?, // 4x5 colour matrix baked into JPEGs, null = none
-        val lutCode: String
+        val lutCode: String,
+        val intervalSeconds: Int = 2,
+        val intervalCount: Int = 0, // 0 = until stopped
+        val mirrorFront: Boolean = true
     )
 
     private val tag = "ProCameraController"
@@ -177,6 +203,22 @@ class ProCameraController(
     private var bindGeneration = 0
     private var analysisActive = false
     private var frontCameraActive = false
+    private var extensionsManager: ExtensionsManager? = null
+    private var extensionsProbeFailed = false
+    private var activeExtension: SceneExtension = SceneExtension.NONE
+    private var currentRotation = Surface.ROTATION_0
+    private var recordingPaused = false
+    private var intervalRunning = false
+    private var mediaActionSound: MediaActionSound? = null
+
+    /** Shutter click / record start-stop sounds. */
+    @Volatile var shutterSoundEnabled = true
+    /** Haptic ticks on shutter, timer and focus. */
+    @Volatile var hapticsEnabled = true
+
+    val isIntervalRunning: Boolean get() = intervalRunning
+    val isRecordingPaused: Boolean get() = recordingPaused
+    val currentExtension: SceneExtension get() = activeExtension
 
     @Volatile
     var capabilities: CameraCapabilities = CameraCapabilities()
@@ -224,13 +266,45 @@ class ProCameraController(
                 return@addListener
             }
             cameraProvider = provider
-            try {
-                bindUseCases(provider, owner, previewView, request)
-            } catch (e: Exception) {
-                Log.e(tag, "bind failed", e)
-                reportError("Не удалось запустить камеру: ${e.localizedMessage ?: e.javaClass.simpleName}")
+            if (extensionsManager == null && !extensionsProbeFailed) {
+                val extFuture = try {
+                    ExtensionsManager.getInstanceAsync(context, provider)
+                } catch (e: Throwable) {
+                    Log.w(tag, "extensions unavailable: ${e.message}")
+                    null
+                }
+                if (extFuture != null) {
+                    extFuture.addListener({
+                        if (generation != bindGeneration) return@addListener
+                        extensionsManager = try {
+                            extFuture.get()
+                        } catch (e: Exception) {
+                            Log.w(tag, "extensions init failed: ${e.message}")
+                            extensionsProbeFailed = true
+                            null
+                        }
+                        bindSafely(provider, owner, previewView, request)
+                    }, mainExecutor)
+                    return@addListener
+                }
+                extensionsProbeFailed = true
             }
+            bindSafely(provider, owner, previewView, request)
         }, mainExecutor)
+    }
+
+    private fun bindSafely(
+        provider: ProcessCameraProvider,
+        owner: LifecycleOwner,
+        previewView: PreviewView,
+        request: BindRequest
+    ) {
+        try {
+            bindUseCases(provider, owner, previewView, request)
+        } catch (e: Exception) {
+            Log.e(tag, "bind failed", e)
+            reportError("Не удалось запустить камеру: ${e.localizedMessage ?: e.javaClass.simpleName}")
+        }
     }
 
     private fun bindUseCases(
@@ -247,20 +321,32 @@ class ProCameraController(
         }
         val useFront = (request.useFront && hasFront) || !hasBack
         frontCameraActive = useFront
-        val selector = if (useFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-        val info = provider.getCameraInfo(selector)
-        val caps = probeCapabilities(info, useFront, hasFront)
+        val baseSelector = if (useFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+        val info = provider.getCameraInfo(baseSelector)
+        val isVideo = request.mode == AppMode.CINE_VIDEO
+        val caps = probeCapabilities(info, useFront, hasFront).copy(availableExtensions = probeExtensions(baseSelector))
         capabilities = caps
         listener.onCapabilities(caps)
 
-        val isVideo = request.mode == AppMode.CINE_VIDEO
+        val wantedExtension = request.extension.takeIf { !isVideo && it != SceneExtension.NONE && caps.availableExtensions.contains(it) }
+            ?: SceneExtension.NONE
+        activeExtension = wantedExtension
+        val selector = if (wantedExtension != SceneExtension.NONE) {
+            runCatching { extensionsManager!!.getExtensionEnabledCameraSelector(baseSelector, wantedExtension.extensionMode) }
+                .getOrElse {
+                    Log.w(tag, "extension selector failed: ${it.message}")
+                    activeExtension = SceneExtension.NONE
+                    baseSelector
+                }
+        } else baseSelector
         val fpsSupported = caps.videoFps.contains(request.fps)
+        val wide = isVideo || request.photoAspect == PhotoAspect.WIDE_16_9
 
         val previewBuilder = Preview.Builder()
             .setResolutionSelector(
                 ResolutionSelector.Builder()
                     .setAspectRatioStrategy(
-                        if (isVideo) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+                        if (wide) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
                         else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
                     )
                     .build()
@@ -330,6 +416,9 @@ class ProCameraController(
             listener.onTelemetry(LiveScopeTelemetry(hasFrame = false))
         }
 
+        imageCapture?.targetRotation = currentRotation
+        videoCapture?.targetRotation = currentRotation
+
         zoomLive?.removeObserver(zoomObserver)
         zoomLive = camera.cameraInfo.zoomState.also { it.observe(owner, zoomObserver) }
 
@@ -346,6 +435,7 @@ class ProCameraController(
                 append(" · ")
                 append(activePhotoFormat.label)
             }
+            if (activeExtension != SceneExtension.NONE) append(" · ").append(activeExtension.labelRu)
             when (boundTier) {
                 1 -> append(" · без скопов")
                 2 -> append(" · только превью")
@@ -355,10 +445,27 @@ class ProCameraController(
     }
 
     private fun buildImageCapture(request: BindRequest, caps: CameraCapabilities): ImageCapture {
+        val extensionActive = activeExtension != SceneExtension.NONE
+        val zsl = request.capturePriority == CapturePriority.ZERO_LAG && caps.zslSupported &&
+            request.photoFormat == PhotoFormat.JPEG && !extensionActive
+        val captureMode = when {
+            zsl -> ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
+            request.capturePriority == CapturePriority.SPEED -> ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+            else -> ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+        }
         val builder = ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-            .setJpegQuality(95)
-        val wanted = request.photoFormat
+            .setCaptureMode(captureMode)
+            .setJpegQuality(request.jpegQuality.coerceIn(1, 100))
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(
+                        if (request.photoAspect == PhotoAspect.WIDE_16_9) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+                        else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+                    )
+                    .build()
+            )
+        // Vendor extensions and ZSL only deliver JPEG.
+        val wanted = if (extensionActive || zsl) PhotoFormat.JPEG else request.photoFormat
         activePhotoFormat = if (caps.photoFormats.contains(wanted)) wanted else PhotoFormat.JPEG
         when (activePhotoFormat) {
             PhotoFormat.RAW_DNG -> builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_RAW)
@@ -379,9 +486,10 @@ class ProCameraController(
             VideoResolution.FHD_1080P -> Quality.FHD
             VideoResolution.HD_720P -> Quality.HD
         }
-        val recorder = Recorder.Builder()
+        val recorderBuilder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(quality, FallbackStrategy.lowerQualityOrHigherThan(quality)))
-            .build()
+        if (request.videoBitrateMbps > 0) recorderBuilder.setTargetVideoEncodingBitRate(request.videoBitrateMbps * 1_000_000)
+        val recorder = recorderBuilder.build()
         val builder = VideoCapture.Builder(recorder)
         if (fpsSupported) builder.setTargetFrameRate(Range(request.fps.fps, request.fps.fps))
         if (request.dynamicRange == VideoDynamicRange.HLG_10 && caps.hdrVideo) builder.setDynamicRange(DynamicRange.HLG_10_BIT)
@@ -439,6 +547,13 @@ class ProCameraController(
         }.ifEmpty { listOf(VideoFps.FPS_30) }
         val previewStab = runCatching { Preview.getPreviewCapabilities(info).isStabilizationSupported }.getOrDefault(false)
         val videoStab = runCatching { videoCaps?.isStabilizationSupported }.getOrNull() == true
+        val zsl = Build.VERSION.SDK_INT >= 23 && runCatching { info.isZslSupported }.getOrDefault(false)
+        val abRaw = (ch(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES) ?: intArrayOf()).toSet()
+        val antiBanding = AntiBanding.entries.filter { abRaw.contains(it.camera2Mode) }.toSet().ifEmpty { setOf(AntiBanding.AUTO) }
+        val nrRaw = (ch(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()).toSet()
+        val noiseModes = setOf(ProcessingMode.AUTO) + ProcessingMode.entries.filter { it.camera2Mode >= 0 && nrRaw.contains(it.camera2Mode) }
+        val edgeRaw = (ch(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()).toSet()
+        val edgeModes = setOf(ProcessingMode.AUTO) + ProcessingMode.entries.filter { it.camera2Mode >= 0 && edgeRaw.contains(it.camera2Mode) }
 
         val focalMm = focals?.firstOrNull()
         val focalEquiv = equivalentFocal(focalMm, physicalSize?.width, physicalSize?.height)
@@ -475,8 +590,22 @@ class ProCameraController(
             sensorMegapixels = megapixels,
             apertureLabel = apertureLabel,
             focalEquivMm = focalEquiv ?: 0,
-            lensOptions = buildLensOptions(info, zoom, focalEquiv, isFront)
+            lensOptions = buildLensOptions(info, zoom, focalEquiv, isFront),
+            zslSupported = zsl,
+            antiBandingModes = antiBanding,
+            noiseReductionModes = noiseModes,
+            edgeModes = edgeModes
         )
+    }
+
+    private fun probeExtensions(selector: CameraSelector): Set<SceneExtension> {
+        val ext = extensionsManager ?: return setOf(SceneExtension.NONE)
+        return buildSet {
+            add(SceneExtension.NONE)
+            SceneExtension.entries.filter { it != SceneExtension.NONE }.forEach { mode ->
+                if (runCatching { ext.isExtensionAvailable(selector, mode.extensionMode) }.getOrDefault(false)) add(mode)
+            }
+        }
     }
 
     private fun equivalentFocal(focalMm: Float?, sensorW: Float?, sensorH: Float?): Int? {
@@ -585,6 +714,19 @@ class ProCameraController(
                 }
                 builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, mode)
             }
+            if (activeExtension == SceneExtension.NONE) {
+                if (params.aeLock && !manualExposure) builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
+                if (params.awbLock && params.awb == AwbPreset.AUTO) builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
+                if (params.antiBanding != AntiBanding.AUTO && caps.antiBandingModes.contains(params.antiBanding)) {
+                    builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, params.antiBanding.camera2Mode)
+                }
+                if (params.noiseReduction != ProcessingMode.AUTO && caps.noiseReductionModes.contains(params.noiseReduction)) {
+                    builder.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, params.noiseReduction.camera2Mode)
+                }
+                if (params.edgeMode != ProcessingMode.AUTO && caps.edgeModes.contains(params.edgeMode)) {
+                    builder.setCaptureRequestOption(CaptureRequest.EDGE_MODE, params.edgeMode.camera2Mode)
+                }
+            }
             Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(builder.build())
         } catch (e: Exception) {
             Log.w(tag, "applyParams: ${e.message}")
@@ -652,9 +794,11 @@ class ProCameraController(
     /** Returns false when a timer countdown was cancelled instead of starting a capture. */
     fun capturePhoto(request: PhotoRequest): Boolean {
         if (captureJob?.isActive == true) {
+            val wasInterval = intervalRunning
             captureJob?.cancel()
             listener.onTimerTick(0)
             listener.onBusy(false)
+            if (wasInterval) listener.onMessage("Интервальная серия остановлена")
             return false
         }
         captureJob = scope.launch(Dispatchers.Main) {
@@ -677,6 +821,8 @@ class ProCameraController(
                     PhotoDriveMode.SINGLE -> takeOne(capture, request)
                     PhotoDriveMode.BURST_5 -> repeat(5) { takeOne(capture, request) }
                     PhotoDriveMode.AEB_3 -> exposureBracket(capture, request)
+                    PhotoDriveMode.FOCUS_STACK_5 -> focusStack(capture, request)
+                    PhotoDriveMode.INTERVAL -> intervalSeries(capture, request)
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) return@launch
@@ -718,20 +864,77 @@ class ProCameraController(
         cam.cameraControl.setExposureCompensationIndex(base)
     }
 
+    /** Five frames from the closest focus distance to infinity, for stacking in a desktop editor. */
+    private suspend fun focusStack(capture: ImageCapture, request: PhotoRequest) {
+        val caps = capabilities
+        val params = currentParams
+        if (!caps.manualFocus || params == null || activeExtension != SceneExtension.NONE) {
+            listener.onMessage("Стекинг фокуса недоступен: нет ручного фокуса, снят один кадр")
+            takeOne(capture, request)
+            return
+        }
+        val near = caps.minFocusDiopters.coerceIn(0.5f, 10f)
+        val steps = 5
+        try {
+            for (i in 0 until steps) {
+                val t = i / (steps - 1).toFloat()
+                val diopters = near * (1f - t) * (1f - t) // denser towards the macro end, last frame at infinity
+                applyParams(params.copy(focusDiopters = diopters))
+                delay(650)
+                takeOne(capture, request)
+            }
+        } finally {
+            applyParams(params)
+        }
+    }
+
+    /** Interval series (time-lapse source). Pressing the shutter again cancels the job. */
+    private suspend fun intervalSeries(capture: ImageCapture, request: PhotoRequest) {
+        val total = request.intervalCount
+        val spacingMs = request.intervalSeconds.coerceAtLeast(1) * 1000L
+        var taken = 0
+        intervalRunning = true
+        listener.onIntervalProgress(0, total, true)
+        try {
+            while (total <= 0 || taken < total) {
+                val startedAt = SystemClock.elapsedRealtime()
+                takeOne(capture, request)
+                taken++
+                listener.onIntervalProgress(taken, total, true)
+                if (total > 0 && taken >= total) break
+                val remaining = spacingMs - (SystemClock.elapsedRealtime() - startedAt)
+                if (remaining > 0L) delay(remaining)
+            }
+            listener.onMessage("Интервальная серия завершена: $taken кадр(ов)")
+        } finally {
+            intervalRunning = false
+            listener.onIntervalProgress(taken, total, false)
+        }
+    }
+
     private suspend fun takeOne(capture: ImageCapture, request: PhotoRequest) {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
         val format = activePhotoFormat
         val jpegName = "GlyphCam_$stamp.jpg"
         val dngName = "GlyphCam_$stamp.dng"
+        val metadata = ImageCapture.Metadata().apply {
+            isReversedHorizontal = frontCameraActive && request.mirrorFront
+        }
 
         fun options(name: String, mime: String) = ImageCapture.OutputFileOptions.Builder(
             resolver,
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             mediaValues(name, mime)
-        ).build()
+        ).setMetadata(metadata).build()
 
         val savedUri: Uri? = suspendCancellableCoroutine { cont ->
             val callback = object : ImageCapture.OnImageSavedCallback {
+                override fun onCaptureStarted() {
+                    playSound(MediaActionSound.SHUTTER_CLICK)
+                    listener.onShutterFired()
+                    vibrateTick(35)
+                }
+
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     if (cont.isActive) cont.resume(outputFileResults.savedUri)
                 }
@@ -751,9 +954,6 @@ class ProCameraController(
                 else -> capture.takePicture(options(jpegName, "image/jpeg"), mainExecutor, callback)
             }
         }
-        listener.onShutterFired()
-        vibrateTick(35)
-
         val names = when (format) {
             PhotoFormat.RAW_PLUS_JPEG -> listOf(jpegName to "image/jpeg", dngName to "image/x-adobe-dng")
             PhotoFormat.RAW_DNG -> listOf(dngName to "image/x-adobe-dng")
@@ -1024,11 +1224,59 @@ class ProCameraController(
         }
     }
 
+    fun pauseResumeRecording() {
+        val rec = activeRecording ?: return
+        runCatching { if (recordingPaused) rec.resume() else rec.pause() }
+            .onFailure { listener.onMessage("Пауза недоступна: ${it.localizedMessage ?: it.javaClass.simpleName}") }
+    }
+
+    /** Saves the current preview frame as a JPEG without interrupting the recording. */
+    fun snapshotFromPreview(previewView: PreviewView, lutMatrix: FloatArray?) {
+        val bitmap = runCatching { previewView.bitmap }.getOrNull()
+        if (bitmap == null) {
+            listener.onMessage("Стоп-кадр недоступен: превью ещё не отрисовано")
+            return
+        }
+        playSound(MediaActionSound.SHUTTER_CLICK)
+        vibrateTick(30)
+        listener.onShutterFired()
+        scope.launch(Dispatchers.IO) {
+            try {
+                val work = if (lutMatrix != null) {
+                    bitmap.copy(Bitmap.Config.ARGB_8888, true).also { applyMatrixInPlace(it, lutMatrix) }
+                } else bitmap
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+                val name = "GlyphCam_${stamp}_frame.jpg"
+                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaValues(name, "image/jpeg"))
+                    ?: throw IllegalStateException("галерея не приняла файл")
+                resolver.openOutputStream(uri)?.use { out -> work.compress(Bitmap.CompressFormat.JPEG, 95, out) }
+                    ?: throw IllegalStateException("не удалось открыть файл")
+                val saved = describeImage(uri, name, "image/jpeg", lutMatrix != null)
+                withContext(Dispatchers.Main) { listener.onCaptureSaved(saved) }
+            } catch (e: Exception) {
+                Log.w(tag, "snapshot failed", e)
+                withContext(Dispatchers.Main) { listener.onMessage("Стоп-кадр не сохранён: ${e.localizedMessage ?: e.javaClass.simpleName}") }
+            }
+        }
+    }
+
     private fun handleRecordEvent(event: VideoRecordEvent, name: String) {
         when (event) {
             is VideoRecordEvent.Start -> {
+                recordingPaused = false
+                playSound(MediaActionSound.START_VIDEO_RECORDING)
                 vibrateTick(40)
                 listener.onRecordingChanged(true, 0L)
+            }
+            is VideoRecordEvent.Pause -> {
+                recordingPaused = true
+                vibrateTick(25)
+                listener.onRecordingPaused(true)
+            }
+            is VideoRecordEvent.Resume -> {
+                recordingPaused = false
+                vibrateTick(25)
+                listener.onRecordingPaused(false)
             }
             is VideoRecordEvent.Status -> {
                 val stats = event.recordingStats
@@ -1046,8 +1294,13 @@ class ProCameraController(
             }
             is VideoRecordEvent.Finalize -> {
                 activeRecording = null
+                if (recordingPaused) {
+                    recordingPaused = false
+                    listener.onRecordingPaused(false)
+                }
                 val elapsedMs = event.recordingStats.recordedDurationNanos / 1_000_000L
                 listener.onRecordingChanged(false, elapsedMs)
+                playSound(MediaActionSound.STOP_VIDEO_RECORDING)
                 vibrateTick(45)
                 restartAudioMeterIfWanted()
                 val recoverable = !event.hasError() ||
@@ -1130,14 +1383,34 @@ class ProCameraController(
     // Sensors & audio meter
     // ------------------------------------------------------------------------------------------
 
+    /** Keeps saved photos and videos upright even though the activity itself is portrait-locked. */
+    private val orientationListener = object : OrientationEventListener(context) {
+        override fun onOrientationChanged(orientation: Int) {
+            if (orientation == ORIENTATION_UNKNOWN) return
+            val rotation = when (orientation) {
+                in 45..134 -> Surface.ROTATION_270
+                in 135..224 -> Surface.ROTATION_180
+                in 225..314 -> Surface.ROTATION_90
+                else -> Surface.ROTATION_0
+            }
+            if (rotation == currentRotation) return
+            currentRotation = rotation
+            imageCapture?.targetRotation = rotation
+            videoCapture?.targetRotation = rotation
+            listener.onDeviceRotation(rotation)
+        }
+    }
+
     fun startSensors() {
         sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { accel ->
             sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_UI)
         }
+        runCatching { if (orientationListener.canDetectOrientation()) orientationListener.enable() }
     }
 
     fun stopSensors() {
         sensorManager?.unregisterListener(this)
+        runCatching { orientationListener.disable() }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -1421,7 +1694,22 @@ class ProCameraController(
     // Misc
     // ------------------------------------------------------------------------------------------
 
+    private fun playSound(sound: Int) {
+        if (!shutterSoundEnabled) return
+        try {
+            val player = mediaActionSound ?: MediaActionSound().also {
+                it.load(MediaActionSound.SHUTTER_CLICK)
+                it.load(MediaActionSound.START_VIDEO_RECORDING)
+                it.load(MediaActionSound.STOP_VIDEO_RECORDING)
+                mediaActionSound = it
+            }
+            player.play(sound)
+        } catch (_: Exception) {
+        }
+    }
+
     fun vibrateTick(durationMs: Long = 18L) {
+        if (!hapticsEnabled) return
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
@@ -1440,6 +1728,8 @@ class ProCameraController(
         captureJob?.cancel()
         stopAudioMeter()
         stopSensors()
+        runCatching { mediaActionSound?.release() }
+        mediaActionSound = null
         runCatching { activeRecording?.stop() }
         runCatching { zoomLive?.removeObserver(zoomObserver) }
         runCatching { cameraProvider?.unbindAll() }
