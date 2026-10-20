@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,9 +21,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -32,8 +30,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -45,16 +43,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.data.CameraPresetEntity
 import com.example.model.LutProfile
+import com.example.ui.components.ChipShape
+import com.example.ui.components.CodeBadge
+import com.example.ui.components.LabelledSlider
+import com.example.ui.components.NothingCard
+import com.example.ui.components.SectionLabel
+import com.example.ui.components.StudioHeader
 import com.example.ui.theme.NothingBlack
 import com.example.ui.theme.NothingBorder
-import com.example.ui.theme.NothingObsidian
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingSilver
 import com.example.ui.theme.NothingSurface
@@ -71,8 +74,8 @@ fun LutAndPresetsScreen(
     state: ProCameraUiState,
     presets: List<CameraPresetEntity>,
     onSelectLut: (LutProfile) -> Unit,
-    onUpdateGrade: (Float, Float, Float, Float, Float) -> Unit,
-    onToggleSplitCompare: () -> Unit,
+    onUpdateGrade: (Float, Float, Float, Float) -> Unit,
+    onToggleBake: () -> Unit,
     onResetGrade: () -> Unit,
     onSavePreset: (String) -> Unit,
     onApplyPreset: (CameraPresetEntity) -> Unit,
@@ -87,427 +90,438 @@ fun LutAndPresetsScreen(
         modifier = modifier
             .fillMaxSize()
             .background(NothingBlack)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
             .testTag("lut_and_presets_screen")
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        StudioHeader(
+            title = "LUT и цвет",
+            subtitle = "ЦВЕТОВЫЕ ПРОФИЛИ · ГРЕЙДИНГ · ПРЕСЕТЫ",
+            onBack = onBackToCamera,
+            backTag = "lut_back_btn"
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onBackToCamera,
-                    modifier = Modifier.testTag("lut_back_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Назад к камере",
-                        tint = NothingWhite
-                    )
-                }
-                Column {
-                    Text(
-                        text = "3D LUT LAB & ПРЕСЕТЫ C1-C4",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = NothingWhite
-                    )
-                    Text(
-                        text = "ЦВЕТОКОРРЕКЦИЯ В РЕАЛЬНОМ ВРЕМЕНИ И ПАМЯТЬ РИГОВ",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = NothingSilver
-                    )
-                }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IconButton(
-                    onClick = onToggleSplitCompare,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (state.splitScreenLutCompare) NothingRed else NothingSurface)
-                        .testTag("btn_split_lut_compare")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Compare,
-                        contentDescription = "Сравнить ДО/ПОСЛЕ",
-                        tint = NothingWhite
-                    )
-                }
-                IconButton(
-                    onClick = onResetGrade,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(NothingSurface)
-                        .testTag("btn_reset_color_grade")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Сбросить грейдинг",
-                        tint = NothingSilver
-                    )
-                }
-            }
+            HeaderIconButton(
+                icon = Icons.Default.Refresh,
+                contentDescription = "Сбросить грейдинг",
+                active = false,
+                onClick = onResetGrade,
+                tag = "btn_reset_color_grade"
+            )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            LutCalibrationPreviewCard(state = state)
 
-        // Live Color Calibration Chart Canvas Preview
-        LutCalibrationPreviewCard(state = state)
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // 1. 3D LUT Film Emulation Profiles
-        Text(
-            text = "КИНОПРОФИЛИ И ЭМУЛЯЦИЯ ПЛЁНКИ (3D LUT)",
-            style = MaterialTheme.typography.labelLarge,
-            color = NothingSilver
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        LutProfile.entries.forEach { lut ->
-            val selected = state.activeLut == lut
-            Row(
+            Spacer(modifier = Modifier.height(10.dp))
+            NothingCard(
+                onClick = onToggleBake,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (selected) NothingSurfaceHigh else NothingObsidian)
-                    .border(
-                        1.dp,
-                        if (selected) Color(lut.accentHex) else NothingBorder,
-                        RoundedCornerShape(10.dp)
-                    )
-                    .clickable { onSelectLut(lut) }
-                    .padding(12.dp)
-                    .testTag("lut_card_${lut.id}"),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .testTag("switch_bake_lut")
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(lut.accentHex).copy(alpha = 0.22f))
-                                .border(1.dp, Color(lut.accentHex), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = lut.code,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = Color(lut.accentHex),
-                                fontSize = 10.sp
-                            )
-                        }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = lut.nameRu,
+                            text = "Впечатывать LUT в JPEG",
                             style = MaterialTheme.typography.titleMedium,
                             color = NothingWhite
                         )
+                        Text(
+                            text = if (state.bakeLutIntoPhotos) {
+                                "Фото сохраняются уже с цветом профиля (EXIF сохраняется). RAW и видео остаются чистыми: для них LUT только мониторинг."
+                            } else {
+                                "Фото сохраняются без обработки, LUT виден только в видоискателе."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NothingSilver
+                        )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = lut.subtitleRu,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NothingSilver,
-                        fontSize = 12.sp
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Switch(
+                        checked = state.bakeLutIntoPhotos,
+                        onCheckedChange = { onToggleBake() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = NothingBlack,
+                            checkedTrackColor = NothingWhite,
+                            uncheckedThumbColor = NothingSilver,
+                            uncheckedTrackColor = NothingSurfaceHigh,
+                            uncheckedBorderColor = NothingBorder
+                        )
                     )
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(18.dp))
+            SectionLabel(text = "Цветовые профили")
+            Spacer(modifier = Modifier.height(8.dp))
 
-        // 2. Color Matrix Fine-Tuning Sliders
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(NothingObsidian)
-                .border(1.dp, NothingBorder, RoundedCornerShape(12.dp))
-                .padding(12.dp)
-        ) {
-            Text(
-                text = "ТОНКАЯ НАСТРОЙКА МАТРИЦЫ ЦВЕТА",
-                style = MaterialTheme.typography.labelLarge,
-                color = ScopeCyan
+            LutProfile.entries.forEach { lut ->
+                val selected = state.activeLut == lut
+                val accent = Color(lut.accentHex)
+                NothingCard(
+                    selected = selected,
+                    accent = accent,
+                    onClick = { onSelectLut(lut) },
+                    contentPadding = PaddingValues(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .testTag("lut_card_${lut.id}")
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LutSwatchStrip(lut = lut, modifier = Modifier.size(width = 44.dp, height = 36.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = lut.nameRu,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = NothingWhite,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                CodeBadge(text = lut.code, color = accent)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = lut.subtitleRu,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NothingSilver
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            NothingCard(contentPadding = PaddingValues(14.dp), modifier = Modifier.fillMaxWidth()) {
+                SectionLabel(text = "Тонкая настройка цвета")
+                Spacer(modifier = Modifier.height(6.dp))
+                LabelledSlider(
+                    label = "Контраст",
+                    valueText = String.format(Locale.US, "%d%%", (state.userContrast * 100).toInt()),
+                    value = state.userContrast,
+                    onValueChange = { onUpdateGrade(it, state.userSaturation, state.shadowLift, state.highlightRollOff) },
+                    valueRange = 0.5f..1.5f,
+                    accent = NothingWhite
+                )
+                LabelledSlider(
+                    label = "Насыщенность",
+                    valueText = String.format(Locale.US, "%d%%", (state.userSaturation * 100).toInt()),
+                    value = state.userSaturation,
+                    onValueChange = { onUpdateGrade(state.userContrast, it, state.shadowLift, state.highlightRollOff) },
+                    valueRange = 0.0f..1.8f,
+                    accent = ScopeCyan
+                )
+                LabelledSlider(
+                    label = "Подъём теней",
+                    valueText = String.format(Locale.US, "%+.2f", state.shadowLift),
+                    value = state.shadowLift,
+                    onValueChange = { onUpdateGrade(state.userContrast, state.userSaturation, it, state.highlightRollOff) },
+                    valueRange = -0.4f..0.4f,
+                    accent = ScopeGreen
+                )
+                LabelledSlider(
+                    label = "Мягкие света",
+                    valueText = String.format(Locale.US, "%d%%", (state.highlightRollOff * 100).toInt()),
+                    value = state.highlightRollOff,
+                    onValueChange = { onUpdateGrade(state.userContrast, state.userSaturation, state.shadowLift, it) },
+                    valueRange = 0.0f..1.0f,
+                    accent = ScopeAmber
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            SectionLabel(
+                text = "Пресеты камеры",
+                trailing = "${presets.size}",
+                trailingColor = NothingWhite
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            GradeSliderRow(
-                label = "КОНТРАСТ",
-                valueText = String.format(Locale.US, "%d%%", (state.userContrast * 100).toInt()),
-                value = state.userContrast,
-                range = 0.5f..1.5f,
-                accent = NothingWhite,
-                onValueChange = {
-                    onUpdateGrade(it, state.userSaturation, state.shadowLift, state.highlightRollOff, state.filmGrainAmount)
-                }
-            )
-            GradeSliderRow(
-                label = "НАСЫЩЕННОСТЬ",
-                valueText = String.format(Locale.US, "%d%%", (state.userSaturation * 100).toInt()),
-                value = state.userSaturation,
-                range = 0.0f..1.8f,
-                accent = ScopeCyan,
-                onValueChange = {
-                    onUpdateGrade(state.userContrast, it, state.shadowLift, state.highlightRollOff, state.filmGrainAmount)
-                }
-            )
-            GradeSliderRow(
-                label = "ПОДЪЁМ ТЕНЕЙ (LIFT)",
-                valueText = String.format(Locale.US, "%+.2f", state.shadowLift),
-                value = state.shadowLift,
-                range = -0.4f..0.4f,
-                accent = ScopeGreen,
-                onValueChange = {
-                    onUpdateGrade(state.userContrast, state.userSaturation, it, state.highlightRollOff, state.filmGrainAmount)
-                }
-            )
-            GradeSliderRow(
-                label = "МЯГКИЕ СВЕТА (ROLL-OFF)",
-                valueText = String.format(Locale.US, "%d%%", (state.highlightRollOff * 100).toInt()),
-                value = state.highlightRollOff,
-                range = 0.0f..1.0f,
-                accent = ScopeAmber,
-                onValueChange = {
-                    onUpdateGrade(state.userContrast, state.userSaturation, state.shadowLift, it, state.filmGrainAmount)
-                }
-            )
-            GradeSliderRow(
-                label = "ПЛЁНОЧНОЕ ЗЕРНО 35MM",
-                valueText = String.format(Locale.US, "%d%%", (state.filmGrainAmount * 100).toInt()),
-                value = state.filmGrainAmount,
-                range = 0.0f..1.0f,
-                accent = NothingRed,
-                onValueChange = {
-                    onUpdateGrade(state.userContrast, state.userSaturation, state.shadowLift, state.highlightRollOff, it)
-                }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        // 3. Room-backed Custom Camera Rig Presets (C1, C2, C3, C4...)
-        Text(
-            text = "ПОЛЬЗОВАТЕЛЬСКИЕ ПРЕСЕТЫ КАМЕРЫ (ПАМЯТЬ C1–C9)",
-            style = MaterialTheme.typography.labelLarge,
-            color = NothingSilver
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = newPresetName,
-                onValueChange = { newPresetName = it },
-                placeholder = {
-                    Text(
-                        text = "Имя рига (напр. NIGHT ANAMORPHIC)",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NothingSilver
-                    )
-                },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NothingRed,
-                    unfocusedBorderColor = NothingBorder,
-                    focusedTextColor = NothingWhite,
-                    unfocusedTextColor = NothingWhite
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("input_preset_name")
-            )
-            Button(
-                onClick = {
-                    onSavePreset(newPresetName)
-                    newPresetName = ""
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = NothingRed),
-                modifier = Modifier.testTag("btn_save_preset")
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("СОХР.", style = MaterialTheme.typography.labelLarge)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        presets.forEach { preset ->
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(NothingObsidian)
-                    .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
-                    .clickable { onApplyPreset(preset) }
-                    .padding(12.dp)
-                    .testTag("preset_item_${preset.slotCode}"),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
+                OutlinedTextField(
+                    value = newPresetName,
+                    onValueChange = { newPresetName = it },
+                    placeholder = {
+                        Text(
+                            text = "Название пресета",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NothingSilver
+                        )
+                    },
+                    singleLine = true,
+                    shape = ChipShape,
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = NothingWhite,
+                        unfocusedBorderColor = NothingBorder,
+                        focusedTextColor = NothingWhite,
+                        unfocusedTextColor = NothingWhite,
+                        cursorColor = NothingRed,
+                        focusedContainerColor = NothingSurface,
+                        unfocusedContainerColor = NothingSurface
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("input_preset_name")
+                )
+                Button(
+                    onClick = {
+                        onSavePreset(newPresetName)
+                        newPresetName = ""
+                    },
+                    shape = ChipShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = NothingRed, contentColor = NothingWhite),
+                    modifier = Modifier
+                        .height(56.dp)
+                        .testTag("btn_save_preset")
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(NothingRed.copy(alpha = 0.2f))
-                            .border(1.dp, NothingRed, RoundedCornerShape(8.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = preset.slotCode,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = NothingWhite
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = preset.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = NothingWhite
-                        )
-                        Text(
-                            text = "${if (preset.isVideoPreset) "CINE" else "PHOTO"} • ISO ${if (preset.isoValue == 0) "AUTO" else preset.isoValue} • ${preset.wbKelvin}K • ${preset.anamorphicLabel}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = NothingSilver,
-                            fontSize = 10.sp
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { onDeletePreset(preset.id) },
-                    modifier = Modifier.testTag("delete_preset_${preset.slotCode}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Удалить пресет",
-                        tint = NothingSilver
-                    )
+                    Text("СОХРАНИТЬ", style = MaterialTheme.typography.labelLarge)
                 }
             }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Пресет запоминает объектив, ISO, выдержку, баланс белого, EV, профиль, рамку, Glyph и параметры видео.",
+                style = MaterialTheme.typography.labelSmall,
+                color = NothingSilver
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (presets.isEmpty()) {
+                Text(
+                    text = "Пресетов пока нет. Настройте камеру и сохраните её состояние под своим именем.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingSilver
+                )
+            }
+
+            presets.forEach { preset ->
+                NothingCard(
+                    onClick = { onApplyPreset(preset) },
+                    contentPadding = PaddingValues(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .testTag("preset_item_${preset.slotCode}")
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(NothingRed.copy(alpha = 0.18f))
+                                .border(1.dp, NothingRed, RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(text = preset.slotCode, style = MaterialTheme.typography.labelLarge, color = NothingWhite)
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = preset.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = NothingWhite,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = presetSummary(preset),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NothingSilver,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(
+                            onClick = { onDeletePreset(preset.id) },
+                            modifier = Modifier.testTag("delete_preset_${preset.slotCode}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Удалить пресет",
+                                tint = NothingSilver
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun presetSummary(preset: CameraPresetEntity): String {
+    val lut = LutProfile.entries.find { it.id == preset.lutId }?.code ?: preset.lutId
+    val iso = if (preset.isoValue == 0) "ISO AUTO" else "ISO ${preset.isoValue}"
+    val zoom = String.format(Locale.US, "%.1f×", preset.zoomRatio)
+    val wb = if (preset.awbPreset == "AUTO") "AWB" else preset.awbPreset
+    return if (preset.isVideoPreset) {
+        val res = preset.videoResolution.removePrefix("UHD_").removePrefix("FHD_").removePrefix("HD_")
+        "ВИДЕО · $res/${preset.videoFps} · $zoom · $iso · $wb · $lut"
+    } else {
+        "ФОТО · $zoom · $iso · $wb · EV ${String.format(Locale.US, "%+.1f", preset.evCompensation)} · $lut"
+    }
+}
+
+@Composable
+private fun HeaderIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    tag: String
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(ChipShape)
+            .background(if (active) NothingRed else NothingSurface)
+            .border(1.dp, if (active) NothingRed else NothingBorder, ChipShape)
+            .clickable { onClick() }
+            .testTag(tag),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (active) NothingWhite else NothingSilver,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/** ColorChecker-like patches pushed through the real 4×5 matrix the preview and JPEGs use. */
+private val ReferencePatches = listOf(
+    Color(0xFFC29682), // light skin
+    Color(0xFF735244), // dark skin
+    Color(0xFF627A9D), // sky
+    Color(0xFF00A6B4), // teal
+    Color(0xFFE07A3C), // amber
+    Color(0xFFD71921), // red
+    Color(0xFF479458), // foliage
+    Color(0xFF383D96), // cobalt
+    Color(0xFF1A1A1A),
+    Color(0xFF555555),
+    Color(0xFF9A9A9A),
+    Color(0xFFE8E8E8)
+)
+
+/** Applies an Android-layout colour matrix (row-major 4×5, translation in 0..255) to one colour. */
+fun applyColorMatrix(color: Color, m: FloatArray?): Color {
+    if (m == null || m.size < 20) return color
+    val r = color.red * 255f
+    val g = color.green * 255f
+    val b = color.blue * 255f
+    val a = color.alpha * 255f
+    val nr = (m[0] * r + m[1] * g + m[2] * b + m[3] * a + m[4]) / 255f
+    val ng = (m[5] * r + m[6] * g + m[7] * b + m[8] * a + m[9]) / 255f
+    val nb = (m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14]) / 255f
+    return Color(nr.coerceIn(0f, 1f), ng.coerceIn(0f, 1f), nb.coerceIn(0f, 1f), color.alpha)
+}
+
+@Composable
+private fun LutSwatchStrip(lut: LutProfile, modifier: Modifier = Modifier) {
+    val matrix = remember(lut) { if (lut.isIdentity) null else lut.buildColorMatrix().values }
+    Canvas(modifier = modifier.clip(RoundedCornerShape(6.dp))) {
+        val patches = ReferencePatches.take(8)
+        val cellW = size.width / 4
+        val cellH = size.height / 2
+        patches.forEachIndexed { idx, base ->
+            drawRect(
+                color = applyColorMatrix(base, matrix),
+                topLeft = Offset((idx % 4) * cellW, (idx / 4) * cellH),
+                size = Size(cellW + 0.5f, cellH + 0.5f)
+            )
         }
     }
 }
 
 @Composable
 private fun LutCalibrationPreviewCard(state: ProCameraUiState) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(NothingObsidian)
-            .border(1.dp, NothingBorder, RoundedCornerShape(12.dp))
-            .padding(10.dp)
-    ) {
+    val matrix = state.lutColorMatrix
+    NothingCard(contentPadding = PaddingValues(12.dp), modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "КАЛИБРОВОЧНАЯ ШКАЛА // ${state.activeLut.nameRu}",
+                text = "${state.activeLut.nameRu} · ${state.activeLut.code}",
                 style = MaterialTheme.typography.labelMedium,
-                color = NothingWhite
+                color = NothingWhite,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
             )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (state.splitScreenLutCompare) "SPLIT WIPE ACTIVE" else "FULL LUT MATRIX",
+                text = if (matrix == null) "БЕЗ ИЗМЕНЕНИЙ" else if (state.bakeLutIntoPhotos) "ПРЕВЬЮ + JPEG" else "ТОЛЬКО ПРЕВЬЮ",
                 style = MaterialTheme.typography.labelMedium,
                 color = ScopeAmber
             )
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(74.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .height(84.dp)
+                .clip(RoundedCornerShape(10.dp))
         ) {
             val w = size.width
             val h = size.height
-            // ColorChecker 8-patch cinema swatches + grayscale ramp
-            val patches = listOf(
-                Color(0xFFC29682), // Light Skin
-                Color(0xFF735244), // Dark Skin
-                Color(0xFF627A9D), // Foliage/Sky
-                Color(0xFF00A6B4), // Teal
-                Color(0xFFE07A3C), // Warm Amber
-                Color(0xFFD71921), // Nothing Crimson
-                Color(0xFF479458), // Green
-                Color(0xFF383D96)  // Cobalt
-            )
-            val patchW = w / patches.size
-            val topH = h * 0.65f
-            patches.forEachIndexed { idx, baseColor ->
-                val sat = (state.activeLut.baseSaturation * state.userSaturation).coerceIn(0f, 1.8f)
-                val gray = baseColor.red * 0.299f + baseColor.green * 0.587f + baseColor.blue * 0.114f
-                val r = (gray + (baseColor.red - gray) * sat + state.activeLut.warmShift * 0.2f).coerceIn(0f, 1f)
-                val g = (gray + (baseColor.green - gray) * sat).coerceIn(0f, 1f)
-                val b = (gray + (baseColor.blue - gray) * sat + state.activeLut.tealShift * 0.2f).coerceIn(0f, 1f)
+            val colorPatches = ReferencePatches.take(8)
+            val patchW = w / colorPatches.size
+            val topH = h * 0.6f
+            colorPatches.forEachIndexed { idx, base ->
                 drawRect(
-                    color = Color(r, g, b),
+                    color = applyColorMatrix(base, matrix),
                     topLeft = Offset(idx * patchW, 0f),
                     size = Size(patchW + 1f, topH)
                 )
             }
-            // Bottom 12-stop luma ramp
-            drawRect(
-                brush = Brush.horizontalGradient(
-                    listOf(
-                        Color.Black.copy(alpha = (1f - state.shadowLift.coerceAtLeast(0f)).coerceIn(0.4f, 1f)),
-                        Color.Gray,
-                        Color.White.copy(alpha = (1f - state.highlightRollOff * 0.25f).coerceIn(0.6f, 1f))
-                    )
-                ),
-                topLeft = Offset(0f, topH),
-                size = Size(w, h - topH)
-            )
+            val steps = 16
+            val stepW = w / steps
+            for (i in 0 until steps) {
+                val v = i / (steps - 1f)
+                val gray = Color(v, v, v)
+                drawRect(
+                    color = applyColorMatrix(gray, matrix),
+                    topLeft = Offset(i * stepW, topH),
+                    size = Size(stepW + 1f, h - topH)
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun GradeSliderRow(
-    label: String,
-    valueText: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    accent: Color,
-    onValueChange: (Float) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = label, style = MaterialTheme.typography.labelMedium, color = NothingSilver)
-            Text(text = valueText, style = MaterialTheme.typography.labelLarge, color = accent)
-        }
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = accent,
-                activeTrackColor = accent,
-                inactiveTrackColor = NothingSurfaceHigh
-            ),
-            modifier = Modifier.height(30.dp)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Сверху: контрольные цвета, снизу: серая шкала. Так же профиль ляжет на живое превью и на JPEG.",
+            style = MaterialTheme.typography.labelSmall,
+            color = NothingSilver,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

@@ -1,0 +1,11 @@
+# Gradle / Kotlin build output
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# Machine-specific
+local.properties
+.idea/
+*.iml
+.DS_Store

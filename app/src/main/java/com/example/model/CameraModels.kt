@@ -4,193 +4,266 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorMatrix
 
 enum class AppMode(val titleRu: String, val badgeCode: String) {
-    PHOTO_PRO("ФОТО PRO", "STILL // RAW"),
-    CINE_VIDEO("КИНО ВИДЕО", "CINE // LOG"),
-    GLYPH_STUDIO("ГЛИФ-СВЕТ", "GLYPH // 33Z"),
-    LUT_LAB("LUT & ЦВЕТ", "COLOR // 3D"),
-    MEDIA_VAULT("АРХИВ EXIF", "VAULT // DNG")
+    PHOTO_PRO("Фото", "ФОТО"),
+    CINE_VIDEO("Видео", "ВИДЕО"),
+    GLYPH_STUDIO("Glyph-студия", "GLYPH"),
+    LUT_LAB("LUT и цвет", "LUT"),
+    MEDIA_VAULT("Архив", "АРХИВ"),
+    SETTINGS("Настройки", "НАСТР")
 }
 
-enum class NothingLens(
+/**
+ * One entry of the lens row. The list is built from the real camera: the zoom range of the
+ * logical camera and the focal lengths of its physical cameras, so every pill switches to a
+ * zoom ratio the device can actually deliver.
+ */
+enum class LensKind(val labelRu: String, val code: String) {
+    ULTRA_WIDE("Сверхширокий", "UW"),
+    MAIN("Основной", ""),
+    TELE("Телеобъектив", "TELE"),
+    MACRO("Макро", "MACRO"),
+    FRONT("Фронтальный", "")
+}
+
+/** A lens pill: a zoom step on the active camera, or a switch to another physical camera of the phone. */
+data class LensOption(
     val id: String,
-    val focalLabel: String,
-    val sensorName: String,
-    val aperture: String,
+    val label: String,
     val zoomRatio: Float,
+    val focalEquivMm: Int? = null,
     val isFront: Boolean = false,
-    val supportsMacro: Boolean = false
-) {
-    ULTRA_WIDE(
-        id = "ultra",
-        focalLabel = "14mm",
-        sensorName = "SAMSUNG JN1 • 50MP",
-        aperture = "f/2.2",
-        zoomRatio = 0.6f,
-        supportsMacro = true
-    ),
-    MAIN_WIDE(
-        id = "main",
-        focalLabel = "24mm",
-        sensorName = "SONY IMX890 • 50MP OIS",
-        aperture = "f/1.88",
-        zoomRatio = 1.0f
-    ),
-    CROP_2X(
-        id = "tele2x",
-        focalLabel = "48mm",
-        sensorName = "IMX890 IN-SENSOR 2X",
-        aperture = "f/1.88",
-        zoomRatio = 2.0f
-    ),
-    CINE_35MM(
-        id = "cine35",
-        focalLabel = "35mm",
-        sensorName = "IMX890 CINE PRIME",
-        aperture = "f/1.88",
-        zoomRatio = 1.45f
-    ),
-    FRONT_32MP(
-        id = "front",
-        focalLabel = "22mm",
-        sensorName = "SONY IMX615 • 32MP",
-        aperture = "f/2.45",
-        zoomRatio = 1.0f,
-        isFront = true
-    )
+    val cameraId: String? = null, // null = zoom step on whichever camera is active
+    val kind: LensKind = LensKind.MAIN
+)
+
+enum class PhotoFormat(val label: String, val badge: String, val descRu: String) {
+    JPEG("JPEG", "JPG", "Стандартный JPEG"),
+    ULTRA_HDR("Ultra HDR", "UHDR", "JPEG с картой яркости HDR"),
+    RAW_DNG("RAW DNG", "DNG", "Несжатый RAW без обработки"),
+    RAW_PLUS_JPEG("RAW + JPEG", "R+J", "DNG и JPEG одним нажатием")
 }
 
-enum class PhotoFormat(val label: String, val badge: String, val bitDepth: String) {
-    JPEG_FINE("JPEG FINE", "JPG", "8-BIT"),
-    RAW_DNG("RAW DNG", "DNG", "12-BIT"),
-    RAW_PLUS_JPEG("RAW + JPG", "R+J", "12-BIT"),
-    HIRES_50MP("50MP ULTRA", "50M", "10-BIT")
+enum class PhotoDriveMode(val labelRu: String, val code: String, val shots: Int) {
+    SINGLE("Одиночный кадр", "1", 1),
+    BURST_5("Серия из 5 кадров", "×5", 5),
+    AEB_3("Брекетинг ±2 EV", "AEB", 3),
+    FOCUS_STACK_5("Стекинг фокуса ×5", "STACK", 5),
+    INTERVAL("Интервальная съёмка", "INT", 0)
 }
 
-enum class PhotoDriveMode(val labelRu: String, val code: String, val burstCount: Int = 1) {
-    SINGLE("ОДИНОЧНЫЙ КАДР", "SGL", 1),
-    BURST_FAST("СЕРИЯ 5 КАДРОВ", "BRS", 5),
-    AEB_BRACKET("БРЕКЕТИНГ AEB ±2EV", "AEB", 3),
-    INTERVAL("ИНТЕРВАЛОМЕТР 3с", "INT", 1),
-    LONG_EXP_ND("ND-ФИЛЬТР ДЛИН. ВЫД.", "ND+", 1)
+/** Output aspect of photos. 16:9 is a native sensor stream; 1:1 is a WYSIWYG crop. */
+enum class PhotoAspect(val label: String, val ratio: Float, val descRu: String) {
+    FULL_4_3("4:3", 4f / 3f, "Полный кадр сенсора"),
+    WIDE_16_9("16:9", 16f / 9f, "Широкий кадр"),
+    SQUARE_1_1("1:1", 1f, "Квадрат")
 }
 
-enum class VideoResolution(val label: String, val dimensions: String, val widthPx: Int, val heightPx: Int) {
-    DCI_4K("4K DCI", "4096×2160", 4096, 2160),
-    UHD_4K("4K UHD", "3840×2160", 3840, 2160),
-    ANAMORPHIC_2_8K("2.8K ANA", "2880×2160", 2880, 2160),
-    FHD_1080P("1080P PRO", "1920×1080", 1920, 1080)
+enum class CapturePriority(val labelRu: String, val code: String, val descRu: String) {
+    QUALITY("Качество", "HQ", "Максимальная детализация, чуть дольше"),
+    SPEED("Скорость", "FAST", "Минимальная задержка затвора"),
+    ZERO_LAG("Без задержки", "ZSL", "Кадр из буфера в момент нажатия")
 }
 
-enum class VideoFps(val fps: Int, val label: String, val cinema180ShutterNs: Long) {
-    FPS_24(24, "24.00p CINE", 20_833_333L),     // 1/48s
-    FPS_25(25, "25.00p PAL", 20_000_000L),      // 1/50s
-    FPS_30(30, "29.97p NTSC", 16_666_667L),     // 1/60s
-    FPS_60(60, "59.94p HIGH", 8_333_333L),      // 1/120s
-    FPS_120(120, "120p S&Q", 4_166_667L)        // 1/240s
+enum class JpegQuality(val value: Int, val label: String) {
+    Q85(85, "85"),
+    Q95(95, "95"),
+    Q100(100, "100")
 }
 
-enum class VideoCodecProfile(val label: String, val bitrateMbps: Int, val dynamicRange: String) {
-    HEVC_ALL_I("H.265 ALL-I 10-BIT", 180, "N-LOG 12-STOP"),
-    HEVC_LONG_GOP("H.265 4:2:0 10-BIT", 100, "HLG BT.2020"),
-    AVC_REC709("H.264 HIGH PROFILE", 60, "REC.709 STD")
+enum class VideoBitrate(val mbps: Int, val label: String) {
+    AUTO(0, "АВТО"),
+    M35(35, "35 Мбит/с"),
+    M70(70, "70 Мбит/с"),
+    M120(120, "120 Мбит/с")
+}
+
+/** Values are the Camera2 CONTROL_AE_ANTIBANDING_MODE constants. */
+enum class AntiBanding(val labelRu: String, val camera2Mode: Int) {
+    AUTO("Авто", 3),
+    HZ_50("50 Гц", 1),
+    HZ_60("60 Гц", 2),
+    OFF("Выкл", 0)
+}
+
+/** Values are the Camera2 NOISE_REDUCTION_MODE / EDGE_MODE constants; AUTO leaves the key unset. */
+enum class ProcessingMode(val labelRu: String, val camera2Mode: Int) {
+    AUTO("Авто", -1),
+    OFF("Выкл", 0),
+    FAST("Быстро", 1),
+    HIGH_QUALITY("Макс. качество", 2)
+}
+
+enum class IntervalSpacing(val seconds: Int, val label: String) {
+    S1(1, "1 с"),
+    S2(2, "2 с"),
+    S5(5, "5 с"),
+    S10(10, "10 с"),
+    S30(30, "30 с")
+}
+
+enum class IntervalCount(val count: Int, val label: String) {
+    C10(10, "10"),
+    C30(30, "30"),
+    C100(100, "100"),
+    UNTIL_STOPPED(0, "∞")
+}
+
+/** CameraX vendor extensions; [extensionMode] mirrors androidx.camera.extensions.ExtensionMode. */
+enum class SceneExtension(val labelRu: String, val code: String, val extensionMode: Int, val descRu: String) {
+    NONE("Обычный", "STD", 0, "Полный ручной контроль"),
+    NIGHT("Ночь", "NIGHT", 3, "Многокадровая ночная обработка производителя"),
+    HDR("HDR", "HDR", 2, "Расширенный динамический диапазон"),
+    BOKEH("Портрет", "BOKEH", 1, "Размытие фона"),
+    FACE_RETOUCH("Ретушь", "FACE", 4, "Сглаживание кожи"),
+    AUTO("Авто-сцена", "AUTO", 5, "Камера сама выбирает обработку")
+}
+
+enum class SelfTimer(val seconds: Int, val label: String) {
+    OFF(0, "ВЫКЛ"),
+    SEC_3(3, "3 С"),
+    SEC_10(10, "10 С")
+}
+
+enum class FlashMode(val labelRu: String, val code: String) {
+    OFF("Выкл", "OFF"),
+    AUTO("Авто", "AUTO"),
+    ON("Вкл", "ON"),
+    TORCH("Фонарик", "TORCH")
+}
+
+enum class VideoResolution(val label: String, val dimensions: String) {
+    UHD_4K("4K", "3840×2160"),
+    FHD_1080P("1080p", "1920×1080"),
+    HD_720P("720p", "1280×720")
+}
+
+enum class VideoFps(val fps: Int, val label: String) {
+    FPS_24(24, "24"),
+    FPS_25(25, "25"),
+    FPS_30(30, "30"),
+    FPS_50(50, "50"),
+    FPS_60(60, "60"),
+    FPS_120(120, "120"),
+    FPS_240(240, "240"),
+    FPS_480(480, "480"),
+    FPS_960(960, "960");
+
+    /** 120 fps and above need a constrained high-speed session (slow motion). */
+    val isHighSpeed: Boolean get() = fps >= 120
+
+    /** Slow-down factor when a high-speed clip is written for 30 fps playback. */
+    val slowMotionFactor: Int get() = (fps / 30).coerceAtLeast(1)
+}
+
+/** Values are android.media.MediaRecorder.AudioSource constants. */
+enum class AudioSourceOption(val labelRu: String, val mediaRecorderSource: Int, val descRu: String) {
+    CAMCORDER("Камкордер", 5, "Микрофон, направленный к сцене, с подавлением шума"),
+    MIC("Стандартный", 1, "Основной микрофон, как в диктофоне"),
+    UNPROCESSED("Без обработки", 9, "Сырой сигнал без шумоподавления и автоусиления, для монтажа")
+}
+
+enum class RecordingLimit(val minutes: Int, val label: String) {
+    NONE(0, "Без лимита"),
+    M1(1, "1 мин"),
+    M5(5, "5 мин"),
+    M10(10, "10 мин"),
+    M30(30, "30 мин")
+}
+
+enum class VideoDynamicRange(val label: String, val descRu: String) {
+    SDR("SDR", "H.264 · 8 бит"),
+    HLG_10("HDR HLG", "HEVC · 10 бит")
+}
+
+/** White balance presets map to the Camera2 AWB modes every device supports. */
+enum class AwbPreset(val labelRu: String, val code: String, val kelvinApprox: Int) {
+    AUTO("Авто", "AWB", 0),
+    INCANDESCENT("Лампа накаливания", "2700K", 2700),
+    FLUORESCENT("Флуоресцент", "4000K", 4000),
+    DAYLIGHT("Дневной свет", "5500K", 5500),
+    CLOUDY("Облачно", "6500K", 6500),
+    SHADE("Тень", "7500K", 7500)
 }
 
 enum class AnamorphicDeSqueeze(val label: String, val scaleX: Float, val descRu: String) {
-    NONE("1.00x SPH", 1.0f, "Сферическая оптика"),
-    ANA_133("1.33x ANA", 1.33f, "Анаморфотный адаптер 1.33x"),
-    ANA_155("1.55x SCOPE", 1.55f, "Широкоэкранный кино-анаморф 1.55x"),
-    ANA_180("1.80x FULL", 1.80f, "Полный анаморфот 1.8x на 4:3")
+    NONE("1.00x", 1.0f, "Без растяжения"),
+    ANA_133("1.33x", 1.33f, "Анаморфотный адаптер 1.33x"),
+    ANA_155("1.55x", 1.55f, "Анаморфот 1.55x"),
+    ANA_180("1.80x", 1.80f, "Анаморфот 1.8x")
 }
 
 enum class FrameAspectGuide(val label: String, val ratio: Float?, val descRu: String) {
-    OFF("БЕЗ РАМКИ", null, "Полное поле сенсора"),
-    CINE_239("2.39:1 SCOPE", 2.39f, "Широкий киноформат Anamorphic Scope"),
-    FLAT_185("1.85:1 FLAT", 1.85f, "Американский кашетированный киноформат"),
-    UNIVISIUM_200("2.00:1 NETFLIX", 2.0f, "Формат Univisium 2:1"),
-    HD_16_9("16:9 UHD", 16f / 9f, "Стандарт широкого вещания"),
-    VERTICAL_9_16("9:16 REELS", 9f / 16f, "Вертикальный формат с центральным маркером"),
-    SQUARE_1_1("1:1 MEDIUM", 1.0f, "Средний формат 6×6")
+    OFF("БЕЗ РАМКИ", null, "Полное поле кадра"),
+    CINE_239("2.39:1", 2.39f, "Широкий киноформат"),
+    FLAT_185("1.85:1", 1.85f, "Кашетированный киноформат"),
+    UNIVISIUM_200("2.00:1", 2.0f, "Формат Univisium 2:1"),
+    HD_16_9("16:9", 16f / 9f, "Стандарт вещания"),
+    VERTICAL_9_16("9:16", 9f / 16f, "Вертикальный формат"),
+    SQUARE_1_1("1:1", 1.0f, "Квадрат")
 }
 
 enum class GridOverlayMode(val labelRu: String, val code: String) {
-    NONE("ВЫКЛ", "OFF"),
-    RULE_OF_THIRDS("ТРЕТИ 3×3", "3X3"),
-    GOLDEN_RATIO("ЗОЛОТОЕ СЕЧЕНИЕ", "PHI"),
-    DIAGONAL_CROSS("ДИАГОНАЛИ + ЦЕНТР", "DIAG"),
-    CINE_CROSSHAIR("КИНО-ПЕРЕКРЕСТИЕ", "XHAIR")
+    NONE("Выкл", "OFF"),
+    RULE_OF_THIRDS("Трети 3×3", "3X3"),
+    GOLDEN_RATIO("Золотое сечение", "PHI"),
+    DIAGONAL_CROSS("Диагонали и центр", "DIAG"),
+    CINE_CROSSHAIR("Кино-перекрестие", "XHAIR")
 }
 
 enum class FocusPeakingColor(val labelRu: String, val color: Color) {
     OFF("ВЫКЛ", Color.Transparent),
-    NOTHING_RED("КРАСНЫЙ NOTHING", Color(0xFFFF2A32)),
-    SCOPE_AMBER("ЯНТАРНЫЙ ARRI", Color(0xFFFFB800)),
-    CYAN_SHARP("ГОЛУБОЙ CYAN", Color(0xFF00E5FF)),
-    CHALK_WHITE("БЕЛЫЙ КОНТУР", Color(0xFFFFFFFF))
+    NOTHING_RED("КРАСНЫЙ", Color(0xFFFF2A32)),
+    SCOPE_AMBER("ЯНТАРНЫЙ", Color(0xFFFFB800)),
+    CYAN_SHARP("ГОЛУБОЙ", Color(0xFF00E5FF)),
+    CHALK_WHITE("БЕЛЫЙ", Color(0xFFFFFFFF))
 }
 
 enum class ZebraThreshold(val label: String, val irePercent: Int?) {
     OFF("ВЫКЛ", null),
-    IRE_95("95% ПЕРЕСВЕТ", 95),
-    IRE_85("85% СВЕТА", 85),
-    IRE_70("70% КОЖА (SKIN)", 70)
+    IRE_95("95%", 95),
+    IRE_85("85%", 85),
+    IRE_70("70%", 70)
 }
 
-enum class MeteringMode(val labelRu: String, val code: String) {
-    MATRIX("МАТРИЧНЫЙ", "MTX"),
-    CENTER_WEIGHTED("ЦЕНТРОВЗВЕШ.", "CTR"),
-    SPOT("ТОЧЕЧНЫЙ SPOT", "SPT"),
-    HIGHLIGHT_PROTECT("ПО СВЕТАМ (ETTR)", "HLT")
-}
-
-enum class StabilizationMode(val labelRu: String, val code: String) {
-    HYBRID_OIS_EIS("OIS + EIS ГИБРИД", "HYB"),
-    OPTICAL_OIS("ТОЛЬКО OIS ОПТИКА", "OIS"),
-    TRIPOD_LOCK("ШТАТИВ (ВЫКЛ EIS)", "TRPD"),
-    HORIZON_LOCK("ГОРИЗОНТ 360°", "HRZ")
-}
-
-enum class AudioDirectionMode(val labelRu: String, val code: String) {
-    STEREO_WIDE("СТЕРЕО 360° (3 МИК.)", "WIDE"),
-    FRONT_CARDIOID("ФРОНТ КАРДИОИДА", "FRNT"),
-    REAR_NARRATOR("ТЫЛОВОЙ ГОЛОС ОПЕРАТОРА", "REAR"),
-    ZOOM_AUDIO("АУДИО-ЗУМ ПО ФОКУСУ", "ZOOM")
-}
-
+/**
+ * Glyph scenarios. Segments are the 11 light strips of Nothing Phone (2); on a device with the
+ * Glyph Interface they are driven through the official SDK, elsewhere the screen says so.
+ */
 enum class GlyphLightingMode(
     val titleRu: String,
     val subtitleRu: String,
     val code: String,
-    val activeZones: Set<Int>
+    val segments: Set<Int>
 ) {
     OFF(
-        "ВЫКЛЮЧЕНО",
+        "Выключено",
         "Подсветка Glyph не используется",
         "OFF",
         emptySet()
     ),
     STUDIO_SOFT_FILL(
-        "МЯГКИЙ ЗАПОЛНЯЮЩИЙ СВЕТ",
-        "Все 33 зоны Glyph работают как рассеянный студийный софтбокс без резких теней вспышки",
-        "FILL 100%",
-        setOf(0, 1, 2, 3, 4)
+        "Мягкий заполняющий свет",
+        "Все полосы Glyph светят ровно, как небольшой софтбокс",
+        "FILL",
+        (0..10).toSet()
     ),
     CAMERA_RING_MACRO(
-        "КОЛЬЦЕВОЙ МАКРО-СВЕТ",
-        "Только верхнее кольцо вокруг объективов IMX890/JN1 для бестеневого макро с 4 см",
+        "Кольцевой макро-свет",
+        "Только дуги вокруг камер: бестеневая подсветка вблизи",
         "RING",
         setOf(0, 1)
     ),
     PORTRAIT_CATCHLIGHT(
-        "ПОРТРЕТНЫЙ БЛИК (C-RING)",
-        "Центральное полукольцо + диагональ создают фирменный блик Nothing в глазах модели",
+        "Портретный блик",
+        "Центральное C-кольцо даёт характерный блик в глазах",
         "CATCH",
-        setOf(0, 2)
+        setOf(3, 4, 5, 6, 7, 8)
     ),
     TALLY_AND_AUDIO_VU(
-        "ИНДИКАТОР ЗАПИСИ + АУДИО VU",
-        "Нижняя полоса работает как живой пикметр микрофона, красная точка сигнализирует REC",
+        "Индикатор записи и уровень звука",
+        "Нижняя полоса показывает уровень микрофона, точка горит во время записи",
         "VU+REC",
-        setOf(1, 3, 4)
+        setOf(9, 10)
     )
 }
 
@@ -209,7 +282,7 @@ enum class LutProfile(
         id = "nothing_std",
         nameRu = "NOTHING NATURAL",
         code = "N-STD",
-        subtitleRu = "Заводская калибровка сенсора Sony IMX890 с точной цветопередачей",
+        subtitleRu = "Без цветокоррекции: кадр таким, каким его отдаёт камера",
         accentHex = 0xFFF5F5F7,
         baseContrast = 1.0f,
         baseSaturation = 1.0f,
@@ -218,9 +291,9 @@ enum class LutProfile(
     ),
     N_LOG_FLAT(
         id = "n_log_flat",
-        nameRu = "NOTHING N-LOG 12-STOP",
-        code = "N-LOG",
-        subtitleRu = "Логарифмический плоский профиль для сохранения максимума деталей в тенях и светах",
+        nameRu = "FLAT LOG",
+        code = "FLAT",
+        subtitleRu = "Пониженный контраст и насыщенность: запас для цветокоррекции потом",
         accentHex = 0xFFA0A0AB,
         baseContrast = 0.72f,
         baseSaturation = 0.62f,
@@ -229,9 +302,9 @@ enum class LutProfile(
     ),
     KODAK_2383_TEAL(
         id = "kodak_2383",
-        nameRu = "CINE 2383 TEAL & ORANGE",
+        nameRu = "CINE TEAL & ORANGE",
         code = "K-2383",
-        subtitleRu = "Киноплёнка Kodak Vision3: холодные циановые тени и тёплые скинтоны",
+        subtitleRu = "Киноплёночный вид: холодные тени и тёплые тона кожи",
         accentHex = 0xFF00E5FF,
         baseContrast = 1.15f,
         baseSaturation = 1.12f,
@@ -240,9 +313,9 @@ enum class LutProfile(
     ),
     NOTHING_MONO_RED(
         id = "mono_red",
-        nameRu = "NOTHING MONO // RED FILTER",
+        nameRu = "MONO · RED FILTER",
         code = "B&W-R",
-        subtitleRu = "Высококонтрастный чёрно-белый режим с симуляцией красного оптического фильтра",
+        subtitleRu = "Контрастное чёрно-белое с имитацией красного фильтра",
         accentHex = 0xFFD71921,
         baseContrast = 1.32f,
         baseSaturation = 0.0f,
@@ -251,9 +324,9 @@ enum class LutProfile(
     ),
     CYBER_HALATION(
         id = "cyber_2099",
-        nameRu = "NEON HALATION 800T",
+        nameRu = "NEON 800T",
         code = "800T",
-        subtitleRu = "Ночная киноплёнка Cinestill 800T для неоновых огней и ночного города",
+        subtitleRu = "Ночной вольфрамовый вид для неона и города",
         accentHex = 0xFFFF4081,
         baseContrast = 1.18f,
         baseSaturation = 1.24f,
@@ -262,9 +335,9 @@ enum class LutProfile(
     ),
     BLEACH_BYPASS(
         id = "bleach_bypass",
-        nameRu = "SILVER RETENTION GRIT",
+        nameRu = "BLEACH BYPASS",
         code = "BLCH",
-        subtitleRu = "Удержание серебра в эмульсии: жёсткий металлический микроконтраст и приглушённый цвет",
+        subtitleRu = "Жёсткий микроконтраст и приглушённый цвет",
         accentHex = 0xFFFFB800,
         baseContrast = 1.28f,
         baseSaturation = 0.48f,
@@ -272,6 +345,9 @@ enum class LutProfile(
         tealShift = 0.06f
     );
 
+    val isIdentity: Boolean get() = this == NOTHING_STD
+
+    /** The 4×5 colour matrix applied to the live preview and baked into photos. */
     fun buildColorMatrix(
         userContrast: Float = 1.0f,
         userSaturation: Float = 1.0f,
@@ -302,23 +378,118 @@ enum class LutProfile(
 
 data class FocusPullPoint(
     val slot: String, // "A", "B", "C"
-    val distanceDiopters: Float, // 0f = Infinity, 10f = 0.1m macro
+    val distanceDiopters: Float, // 0f = infinity, 10f = 0.1 m
     val labelMeters: String
 )
 
+/** Everything the scopes and overlays draw. Computed from real preview frames only. */
 data class LiveScopeTelemetry(
-    val lumaHistogram: IntArray = IntArray(64) { 10 },
-    val redHistogram: IntArray = IntArray(64) { 8 },
-    val greenHistogram: IntArray = IntArray(64) { 10 },
-    val blueHistogram: IntArray = IntArray(64) { 9 },
-    val waveformColumns: FloatArray = FloatArray(48) { 0.45f },
-    val vectorscopePoints: List<Pair<Float, Float>> = emptyList(), // normalized (-1..1, -1..1) U/V
+    val hasFrame: Boolean = false,
+    val lumaHistogram: IntArray = IntArray(64),
+    val redHistogram: IntArray = IntArray(64),
+    val greenHistogram: IntArray = IntArray(64),
+    val blueHistogram: IntArray = IntArray(64),
+    val waveformColumns: FloatArray = FloatArray(48),
+    val vectorscopePoints: List<Pair<Float, Float>> = emptyList(), // normalized (-1..1) U/V
     val zebraGrid: Array<BooleanArray> = Array(12) { BooleanArray(16) },
     val peakingGrid: Array<FloatArray> = Array(16) { FloatArray(24) },
-    val falseColorGrid: Array<IntArray> = Array(12) { IntArray(16) { 50 } },
-    val averageIre: Int = 48,
-    val highlightClipPercent: Float = 0.4f,
-    val shadowCrushPercent: Float = 0.8f,
-    val dynamicRangeStops: Float = 11.8f,
-    val colorTempEstimateK: Int = 5400
+    val falseColorGrid: Array<IntArray> = Array(12) { IntArray(16) },
+    val averageIre: Int = 0,
+    val highlightClipPercent: Float = 0f,
+    val shadowCrushPercent: Float = 0f,
+    val sceneContrastStops: Float = 0f,
+    val colorTempEstimateK: Int = 0
+)
+
+/** What the attached camera can do, probed once per bind from CameraX and Camera2 characteristics. */
+data class CameraCapabilities(
+    val cameraLabel: String = "",
+    val isFront: Boolean = false,
+    val hasFrontCamera: Boolean = false,
+    val minZoom: Float = 1f,
+    val maxZoom: Float = 1f,
+    val hasFlash: Boolean = false,
+    val manualSensor: Boolean = false,
+    val isoMin: Int = 100,
+    val isoMax: Int = 800,
+    val exposureMinNs: Long = 100_000L,
+    val exposureMaxNs: Long = 100_000_000L,
+    val manualFocus: Boolean = false,
+    val minFocusDiopters: Float = 0f,
+    val evIndexMin: Int = 0,
+    val evIndexMax: Int = 0,
+    val evStep: Float = 0f,
+    val photoFormats: Set<PhotoFormat> = setOf(PhotoFormat.JPEG),
+    val videoResolutions: List<VideoResolution> = listOf(VideoResolution.FHD_1080P),
+    val videoFps: List<VideoFps> = listOf(VideoFps.FPS_30),
+    val hdrVideo: Boolean = false,
+    val previewStabilization: Boolean = false,
+    val videoStabilization: Boolean = false,
+    val sensorMegapixels: Float = 0f,
+    val apertureLabel: String = "",
+    val focalEquivMm: Int = 0,
+    val lensOptions: List<LensOption> = emptyList(),
+    val activeCameraId: String = "",
+    val cameraKind: LensKind = LensKind.MAIN,
+    /** Standard-session frame rates per resolution (Camera2 stream map + AE ranges). */
+    val fpsByResolution: Map<VideoResolution, List<VideoFps>> = emptyMap(),
+    /** High-speed (slow-motion) frame rates per resolution. */
+    val highSpeedFpsByResolution: Map<VideoResolution, List<VideoFps>> = emptyMap(),
+    val zslSupported: Boolean = false,
+    val antiBandingModes: Set<AntiBanding> = setOf(AntiBanding.AUTO),
+    val noiseReductionModes: Set<ProcessingMode> = setOf(ProcessingMode.AUTO),
+    val edgeModes: Set<ProcessingMode> = setOf(ProcessingMode.AUTO),
+    val availableExtensions: Set<SceneExtension> = setOf(SceneExtension.NONE)
+) {
+    val evRange: Float get() = if (evStep > 0f) evIndexMax * evStep else 0f
+
+    /** Frame rates this resolution can record, standard first, then slow-motion. */
+    fun fpsFor(resolution: VideoResolution): List<VideoFps> {
+        if (fpsByResolution.isEmpty() && highSpeedFpsByResolution.isEmpty()) return videoFps
+        return (fpsByResolution[resolution].orEmpty() + highSpeedFpsByResolution[resolution].orEmpty())
+            .distinct()
+            .sortedBy { it.fps }
+    }
+
+    fun supports(resolution: VideoResolution, fps: VideoFps): Boolean = fpsFor(resolution).contains(fps)
+
+    /** Resolutions that can record at the given frame rate, highest first. */
+    fun resolutionsFor(fps: VideoFps): List<VideoResolution> = VideoResolution.entries.filter { supports(it, fps) }
+
+    val allVideoFps: List<VideoFps>
+        get() = VideoResolution.entries.flatMap { fpsFor(it) }.distinct().sortedBy { it.fps }.ifEmpty { videoFps }
+}
+
+sealed class CameraStatus {
+    object NoPermission : CameraStatus()
+    object Starting : CameraStatus()
+    data class Ready(val detail: String) : CameraStatus()
+    data class Error(val message: String) : CameraStatus()
+}
+
+/** Live values reported by the camera pipeline for the current frame. */
+data class LiveExposureInfo(
+    val iso: Int = 0,
+    val exposureNs: Long = 0L,
+    val focusDistanceDiopters: Float = 0f,
+    val afLocked: Boolean = false,
+    val aeConverged: Boolean = false
+)
+
+/** A file written to MediaStore by this app, with the metadata read back from it. */
+data class SavedCapture(
+    val uri: String,
+    val isVideo: Boolean,
+    val displayName: String,
+    val mimeType: String,
+    val width: Int,
+    val height: Int,
+    val sizeBytes: Long,
+    val durationMs: Long,
+    val iso: Int?,
+    val exposureTimeSec: Double?,
+    val fNumber: Double?,
+    val focalLengthMm: Double?,
+    val lutBaked: Boolean,
+    val histogram16: IntArray
 )

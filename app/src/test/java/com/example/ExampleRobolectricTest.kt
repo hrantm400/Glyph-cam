@@ -3,12 +3,28 @@ package com.example
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.UserSettings
 import com.example.model.AppMode
+import com.example.model.CameraCapabilities
 import com.example.model.GlyphLightingMode
+import com.example.model.LensKind
+import com.example.model.LensOption
+import com.example.model.VideoFps
+import com.example.model.VideoResolution
+import com.example.model.IntervalCount
+import com.example.model.JpegQuality
 import com.example.model.LutProfile
-import com.example.model.NothingLens
+import com.example.model.PhotoAspect
+import com.example.model.PhotoDriveMode
+import com.example.model.SceneExtension
+import com.example.model.VideoBitrate
 import com.example.viewmodel.ProCameraViewModel
+import com.example.viewmodel.QuickSetting
+import com.example.viewmodel.formatExposure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,25 +43,154 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `pro camera viewModel updates lens shutter angle glyph and lut state`() {
+    fun `exposure labels are human readable`() {
+        assertEquals("1/60", formatExposure(16_666_667L))
+        assertEquals("1/1000", formatExposure(1_000_000L))
+        assertEquals("2.0\"", formatExposure(2_000_000_000L))
+        assertEquals("—", formatExposure(0L))
+    }
+
+    @Test
+    fun `lut matrices are identity only for the natural profile`() {
+        assertTrue(LutProfile.NOTHING_STD.isIdentity)
+        assertFalse(LutProfile.KODAK_2383_TEAL.isIdentity)
+        val mono = LutProfile.NOTHING_MONO_RED.buildColorMatrix().values
+        // Fully desaturated: every output channel mixes R, G and B.
+        assertTrue(mono[1] > 0f && mono[2] > 0f && mono[5] > 0f)
+    }
+
+    @Test
+    fun `pro camera viewModel updates shutter glyph lut and mode state`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = ProCameraViewModel(app)
 
-        viewModel.selectLens(NothingLens.ULTRA_WIDE)
-        assertEquals(NothingLens.ULTRA_WIDE, viewModel.uiState.value.selectedLens)
-        assertEquals(0.6f, viewModel.uiState.value.fineZoomRatio, 0.01f)
-
+        viewModel.setAppMode(AppMode.CINE_VIDEO)
         viewModel.setShutterAngle(180f)
-        assertEquals("180.0°", viewModel.uiState.value.shutterDisplayLabel)
-
-        viewModel.selectGlyphLightingMode(GlyphLightingMode.STUDIO_SOFT_FILL)
-        assertEquals(11, viewModel.uiState.value.activeGlyphSegments.size)
-
-        viewModel.selectLutProfile(LutProfile.NOTHING_MONO_RED)
-        assertEquals(LutProfile.NOTHING_MONO_RED, viewModel.uiState.value.activeLut)
+        assertEquals("180°", viewModel.uiState.value.shutterDisplayLabel)
+        assertEquals(16_666_666L, viewModel.uiState.value.shutterNs)
 
         viewModel.setAppMode(AppMode.PHOTO_PRO)
         assertEquals(AppMode.PHOTO_PRO, viewModel.uiState.value.activeMode)
-        assertTrue(viewModel.uiState.value.shutterDisplayLabel.startsWith("1/"))
+        assertEquals("1/60", viewModel.uiState.value.shutterDisplayLabel)
+
+        viewModel.setShutterAuto()
+        assertEquals("AUTO", viewModel.uiState.value.shutterDisplayLabel)
+
+        viewModel.selectGlyphLightingMode(GlyphLightingMode.STUDIO_SOFT_FILL)
+        assertEquals(11, viewModel.uiState.value.activeGlyphSegments.size)
+        assertFalse(viewModel.uiState.value.glyphSupported)
+
+        viewModel.selectLutProfile(LutProfile.NOTHING_MONO_RED)
+        assertEquals(LutProfile.NOTHING_MONO_RED, viewModel.uiState.value.activeLut)
+        assertNotNull(viewModel.uiState.value.lutColorMatrix)
+        viewModel.selectLutProfile(LutProfile.NOTHING_STD)
+        assertNull(viewModel.uiState.value.lutColorMatrix)
+
+        viewModel.setAppMode(AppMode.MEDIA_VAULT)
+        assertEquals(AppMode.PHOTO_PRO, viewModel.uiState.value.cameraMode)
+    }
+
+    @Test
+    fun `pro pack settings persist across view models and shape the bind key`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = ProCameraViewModel(app)
+
+        vm.setJpegQuality(JpegQuality.Q100)
+        vm.setPhotoAspect(PhotoAspect.SQUARE_1_1)
+        vm.setVideoBitrate(VideoBitrate.M70)
+        vm.toggleShutterSound()
+        assertEquals(1f, vm.uiState.value.viewfinderAspect)
+        assertEquals(JpegQuality.Q100, vm.uiState.value.bindKey.jpegQuality)
+        assertEquals(PhotoAspect.SQUARE_1_1, vm.uiState.value.bindKey.photoAspect)
+        assertFalse(vm.controller.shutterSoundEnabled)
+
+        val stored = UserSettings.load(app)
+        assertEquals(JpegQuality.Q100, stored.jpegQuality)
+        assertEquals(PhotoAspect.SQUARE_1_1, stored.photoAspect)
+        assertEquals(VideoBitrate.M70, stored.videoBitrate)
+        assertFalse(stored.shutterSound)
+
+        val second = ProCameraViewModel(app)
+        assertEquals(JpegQuality.Q100, second.uiState.value.jpegQuality)
+        assertFalse(second.uiState.value.shutterSound)
+
+        // Interval settings switch the drive mode; the sheet toggles open and closed.
+        vm.setIntervalCount(IntervalCount.C10)
+        assertEquals(PhotoDriveMode.INTERVAL, vm.uiState.value.photoDriveMode)
+        assertEquals("0 / 10", vm.uiState.value.intervalProgressLabel)
+        vm.openQuickSetting(QuickSetting.DRIVE)
+        assertEquals(QuickSetting.DRIVE, vm.uiState.value.quickSetting)
+        vm.openQuickSetting(QuickSetting.DRIVE)
+        assertNull(vm.uiState.value.quickSetting)
+
+        // Scene modes stay off until the camera reports them.
+        vm.selectSceneExtension(SceneExtension.NIGHT)
+        assertEquals(SceneExtension.NONE, vm.uiState.value.sceneExtension)
+        assertFalse(vm.uiState.value.isExtensionActive)
+
+        // Video keeps a 16:9 box whatever the photo aspect is.
+        vm.setAppMode(AppMode.CINE_VIDEO)
+        assertEquals(9f / 16f, vm.uiState.value.viewfinderAspect)
+
+        // Volume keys fire the shutter only while enabled.
+        assertTrue(vm.onVolumeKey())
+        vm.toggleVolumeKeyShutter()
+        assertFalse(vm.onVolumeKey())
+    }
+
+    @Test
+    fun `frame rate and resolution follow what the camera reports, lenses switch cameras`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = ProCameraViewModel(app)
+        val caps = CameraCapabilities(
+            cameraLabel = "Основная камера · 50 МП",
+            videoResolutions = listOf(VideoResolution.UHD_4K, VideoResolution.FHD_1080P, VideoResolution.HD_720P),
+            fpsByResolution = mapOf(
+                VideoResolution.UHD_4K to listOf(VideoFps.FPS_24, VideoFps.FPS_30),
+                VideoResolution.FHD_1080P to listOf(VideoFps.FPS_24, VideoFps.FPS_30, VideoFps.FPS_60),
+                VideoResolution.HD_720P to listOf(VideoFps.FPS_30, VideoFps.FPS_60)
+            ),
+            highSpeedFpsByResolution = mapOf(
+                VideoResolution.FHD_1080P to listOf(VideoFps.FPS_120, VideoFps.FPS_240),
+                VideoResolution.HD_720P to listOf(VideoFps.FPS_480)
+            ),
+            activeCameraId = "0",
+            lensOptions = listOf(
+                LensOption("cam2", "0.6×", 1f, 13, cameraId = "2", kind = LensKind.ULTRA_WIDE),
+                LensOption("cam0", "1×", 1f, 24, cameraId = "0", kind = LensKind.MAIN),
+                LensOption("z2.0", "2×", 2f, 48, cameraId = null, kind = LensKind.TELE)
+            )
+        )
+        vm.setAppMode(AppMode.CINE_VIDEO)
+        vm.onCapabilities(caps)
+        assertEquals(VideoResolution.UHD_4K, vm.uiState.value.videoResolution)
+        assertEquals(VideoFps.FPS_30, vm.uiState.value.videoFps)
+        assertTrue(VideoFps.FPS_240.isHighSpeed)
+        assertEquals(8, VideoFps.FPS_240.slowMotionFactor)
+
+        // 240 fps is only possible at 1080p: the resolution follows the frame rate.
+        vm.setVideoFps(VideoFps.FPS_240)
+        assertEquals(VideoFps.FPS_240, vm.uiState.value.videoFps)
+        assertEquals(VideoResolution.FHD_1080P, vm.uiState.value.videoResolution)
+        assertTrue(vm.uiState.value.isSlowMotionMode)
+        assertTrue(vm.uiState.value.bindKey.slowMotion)
+
+        // Back to 4K: 240 is impossible there, so the frame rate drops to the best standard one.
+        vm.setVideoResolution(VideoResolution.UHD_4K)
+        assertEquals(VideoFps.FPS_30, vm.uiState.value.videoFps)
+        assertFalse(vm.uiState.value.isSlowMotionMode)
+
+        // 960 fps is not offered anywhere on this camera.
+        vm.setVideoFps(VideoFps.FPS_960)
+        assertEquals(VideoFps.FPS_30, vm.uiState.value.videoFps)
+        assertEquals(listOf(VideoResolution.FHD_1080P), caps.resolutionsFor(VideoFps.FPS_120))
+
+        // Lens pills: the main camera at 1× is selected; the ultra-wide switches the camera id.
+        assertEquals("cam0", vm.uiState.value.selectedLensId)
+        vm.selectLens(caps.lensOptions.first { it.id == "cam2" })
+        assertEquals("2", vm.uiState.value.activeCameraId)
+        assertEquals("2", vm.uiState.value.bindKey.cameraId)
+        vm.toggleFrontCamera()
+        assertNull(vm.uiState.value.activeCameraId)
     }
 }

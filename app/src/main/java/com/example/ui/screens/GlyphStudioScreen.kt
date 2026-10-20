@@ -9,27 +9,18 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -46,12 +37,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.model.GlyphLightingMode
+import com.example.ui.components.CodeBadge
+import com.example.ui.components.NothingCard
+import com.example.ui.components.NothingSlider
+import com.example.ui.components.SectionLabel
+import com.example.ui.components.StatusDot
+import com.example.ui.components.StudioHeader
 import com.example.ui.theme.GlyphLedWarm
 import com.example.ui.theme.NothingBlack
 import com.example.ui.theme.NothingBorder
-import com.example.ui.theme.NothingObsidian
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.NothingSilver
 import com.example.ui.theme.NothingSurface
@@ -68,6 +63,7 @@ fun GlyphStudioScreen(
     onToggleSegment: (Int) -> Unit,
     onBrightnessChange: (Int) -> Unit,
     onToggleTorchHardware: () -> Unit,
+    onReconnect: () -> Unit,
     onBackToCamera: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -77,266 +73,285 @@ fun GlyphStudioScreen(
         modifier = modifier
             .fillMaxSize()
             .background(NothingBlack)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
             .testTag("glyph_studio_screen")
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        StudioHeader(
+            title = "Glyph-студия",
+            subtitle = when {
+                !state.glyphSupported -> "GLYPH INTERFACE · НЕДОСТУПНО"
+                state.glyphConnected -> state.glyphDeviceName.uppercase() + " · ПОДКЛЮЧЕНО"
+                else -> state.glyphDeviceName.uppercase() + " · НЕТ СВЯЗИ"
+            },
+            onBack = onBackToCamera,
+            backTag = "glyph_back_btn"
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onBackToCamera,
-                    modifier = Modifier.testTag("glyph_back_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Назад к камере",
-                        tint = NothingWhite
-                    )
-                }
-                Column {
-                    Text(
-                        text = "GLYPH STUDIO // NOTHING (2)",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = NothingWhite
-                    )
-                    Text(
-                        text = "11 LED СЕГМЕНТОВ • 33 АДРЕСУЕМЫЕ ЗОНЫ ПОДСВЕТКИ",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = NothingSilver
-                    )
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(NothingRed.copy(alpha = 0.2f))
-                    .border(1.dp, NothingRed, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = "${state.glyphBrightness}% LUM",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = NothingRed
-                )
-            }
+            CodeBadge(
+                text = if (state.glyphConnected) "${state.glyphBrightness}%" else "OFF",
+                color = if (state.glyphConnected) NothingRed else NothingSilver
+            )
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Interactive Nothing Phone (2) Rear Chassis Schematic + Zone Controls
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
         ) {
-            // Left: Interactive Nothing Phone (2) Rear Glyph Schematic
-            NothingPhone2GlyphSchematic(
-                activeSegments = state.activeGlyphSegments,
-                brightness = state.glyphBrightness,
-                audioDb = state.peakAudioDb,
-                isRecording = state.isRecording,
-                onTapSegment = onToggleSegment,
-                modifier = Modifier
-                    .width(175.dp)
-                    .height(330.dp)
-            )
+            GlyphStatusCard(state = state, onReconnect = onReconnect)
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Right: Dimmer, Torch Link, and Quick Zone Toggles
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top
             ) {
-                Column(
+                // Left: interactive rear-panel schematic (tap a segment to toggle it)
+                NothingPhone2GlyphSchematic(
+                    activeSegments = state.activeGlyphSegments,
+                    brightness = state.glyphBrightness,
+                    isRecording = state.isRecording,
+                    onTapSegment = onToggleSegment,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(NothingObsidian)
-                        .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        text = "ЯРКОСТЬ GLYPH МАТРИЦЫ",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = NothingSilver
-                    )
-                    Text(
-                        text = "${state.glyphBrightness}% (${3300 + state.glyphBrightness * 12}K SOFT)",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = NothingWhite
-                    )
-                    Slider(
-                        value = state.glyphBrightness.toFloat(),
-                        onValueChange = { onBrightnessChange(it.toInt()) },
-                        valueRange = 0f..100f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = NothingWhite,
-                            activeTrackColor = NothingRed,
-                            inactiveTrackColor = NothingSurfaceHigh
-                        ),
-                        modifier = Modifier.testTag("slider_glyph_brightness")
-                    )
-                }
+                        .width(148.dp)
+                        .height(304.dp)
+                )
 
-                // Hardware Torch Synchronization Switch
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(NothingObsidian)
-                        .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
-                        .clickable { onToggleTorchHardware() }
-                        .padding(12.dp)
-                        .testTag("switch_glyph_torch"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "СИНХР. СО СВЕТОДИОДОМ КАМЕРЫ",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = NothingWhite,
-                            fontSize = 11.sp
-                        )
-                        Text(
-                            text = "Включает аппаратный заполняющий свет вместе с Glyph",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = NothingSilver,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Switch(
-                        checked = state.glyphTorchHardwareSync,
-                        onCheckedChange = { onToggleTorchHardware() },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = NothingWhite,
-                            checkedTrackColor = NothingRed
-                        )
-                    )
-                }
-
-                // Individual Zone Grid
+                // Right: brightness, LED flash link, manual segments
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(NothingObsidian)
-                        .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
-                        .padding(10.dp)
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "РУЧНОЙ ВЫБОР 11 СЕГМЕНТОВ",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = NothingSilver
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    val zoneLabels = listOf(
-                        0 to "LENS L", 1 to "LENS R", 2 to "SLASH /",
-                        3 to "C-TOP L", 4 to "C-TOP R", 5 to "C-MID L",
-                        6 to "C-MID R", 7 to "C-BOT L", 8 to "C-BOT R",
-                        9 to "USB VU", 10 to "DOT REC"
-                    )
-                    for (rowIdx in 0 until 4) {
-                        Row(
+                    NothingCard(contentPadding = PaddingValues(12.dp)) {
+                        SectionLabel(
+                            text = "Яркость",
+                            trailing = "${state.glyphBrightness}%",
+                            trailingColor = NothingWhite
+                        )
+                        NothingSlider(
+                            value = state.glyphBrightness.toFloat(),
+                            onValueChange = { onBrightnessChange(it.toInt()) },
+                            valueRange = 0f..100f,
+                            accent = NothingWhite,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                .testTag("slider_glyph_brightness")
+                        )
+                        Text(
+                            text = "уровень ${state.glyphBrightness * 40} / 4000",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NothingSilver
+                        )
+                    }
+
+                    NothingCard(
+                        onClick = onToggleTorchHardware,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier.testTag("switch_glyph_torch")
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val slice = zoneLabels.drop(rowIdx * 3).take(3)
-                            slice.forEach { (idx, lbl) ->
-                                val isOn = state.activeGlyphSegments.contains(idx)
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(5.dp))
-                                        .background(if (isOn) NothingWhite else NothingSurface)
-                                        .border(
-                                            1.dp,
-                                            if (isOn) NothingWhite else NothingBorder,
-                                            RoundedCornerShape(5.dp)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "LED-фонарик",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = NothingWhite
+                                )
+                                Text(
+                                    text = if (state.capabilities.hasFlash) "Постоянный свет вспышки камеры" else "У этой камеры нет вспышки",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NothingSilver
+                                )
+                            }
+                            Switch(
+                                checked = state.glyphTorchHardwareSync,
+                                onCheckedChange = { onToggleTorchHardware() },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = NothingBlack,
+                                    checkedTrackColor = NothingWhite,
+                                    uncheckedThumbColor = NothingSilver,
+                                    uncheckedTrackColor = NothingSurfaceHigh,
+                                    uncheckedBorderColor = NothingBorder
+                                )
+                            )
+                        }
+                    }
+
+                    NothingCard(contentPadding = PaddingValues(10.dp)) {
+                        SectionLabel(
+                            text = "Сегменты",
+                            trailing = "${state.activeGlyphSegments.size}/11",
+                            trailingColor = NothingWhite
+                        )
+                        if (!state.glyphSupported) {
+                            Text(
+                                text = "Схема повторяет заднюю панель Nothing Phone (2); на этом устройстве она ничего не включает.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NothingSilver,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val zoneLabels = listOf(
+                            0 to "LENS L", 1 to "LENS R", 2 to "SLASH",
+                            3 to "C-TOP L", 4 to "C-TOP R", 5 to "C-MID L",
+                            6 to "C-MID R", 7 to "C-BOT L", 8 to "C-BOT R",
+                            9 to "USB VU", 10 to "DOT REC"
+                        )
+                        zoneLabels.chunked(3).forEach { rowItems ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                rowItems.forEach { (idx, lbl) ->
+                                    val isOn = state.activeGlyphSegments.contains(idx)
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isOn) NothingWhite else NothingSurface)
+                                            .border(
+                                                1.dp,
+                                                if (isOn) NothingWhite else NothingBorder,
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { onToggleSegment(idx) }
+                                            .padding(vertical = 9.dp)
+                                            .testTag("glyph_seg_$idx"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = lbl,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isOn) NothingBlack else NothingSilver,
+                                            maxLines = 1
                                         )
-                                        .clickable { onToggleSegment(idx) }
-                                        .padding(vertical = 6.dp)
-                                        .testTag("glyph_seg_$idx"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = lbl,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = if (isOn) NothingBlack else NothingSilver,
-                                        fontSize = 8.sp
-                                    )
+                                    }
+                                }
+                                repeat(3 - rowItems.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "СТУДИЙНЫЕ СЦЕНАРИИ ПОДСВЕТКИ NOTHING (2)",
-            style = MaterialTheme.typography.labelLarge,
-            color = NothingSilver
-        )
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+            SectionLabel(text = "Сценарии подсветки")
+            Spacer(modifier = Modifier.height(8.dp))
 
-        GlyphLightingMode.entries.forEach { mode ->
-            val selected = state.glyphMode == mode
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (selected) NothingSurfaceHigh else NothingObsidian)
-                    .border(
-                        1.dp,
-                        if (selected) NothingRed else NothingBorder,
-                        RoundedCornerShape(10.dp)
-                    )
-                    .clickable { onSelectGlyphMode(mode) }
-                    .padding(12.dp)
-                    .testTag("glyph_mode_${mode.name}"),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+            GlyphLightingMode.entries.forEach { mode ->
+                val selected = state.glyphMode == mode
+                NothingCard(
+                    selected = selected,
+                    accent = NothingRed,
+                    onClick = { onSelectGlyphMode(mode) },
+                    contentPadding = PaddingValues(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .testTag("glyph_mode_${mode.name}")
+                ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = mode.titleRu,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = if (selected) NothingWhite else NothingSilver
-                        )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (selected) NothingRed else NothingSurface)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = mode.titleRu,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (selected) NothingWhite else NothingSilver,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                CodeBadge(
+                                    text = mode.code,
+                                    color = if (selected) NothingRed else NothingSilver
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = mode.code,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = NothingWhite,
-                                fontSize = 9.sp
+                                text = mode.subtitleRu,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NothingSilver
                             )
                         }
+                        if (selected) {
+                            Spacer(modifier = Modifier.width(12.dp))
+                            StatusDot(color = NothingRed, size = 10.dp)
+                        }
                     }
-                    Spacer(modifier = Modifier.height(3.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlyphStatusCard(state: ProCameraUiState, onReconnect: () -> Unit) {
+    val accent = when {
+        !state.glyphSupported -> NothingSilver
+        state.glyphConnected -> ScopeGreen
+        else -> ScopeAmber
+    }
+    NothingCard(
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+        accent = accent,
+        selected = state.glyphConnected,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("glyph_status_card")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusDot(color = accent, size = 10.dp)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = when {
+                        !state.glyphSupported -> "Glyph Interface недоступен"
+                        state.glyphConnected -> "Glyph Interface подключён"
+                        else -> "Glyph Interface не отвечает"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = NothingWhite
+                )
+                Text(
+                    text = state.glyphMessage.ifEmpty { state.glyphDeviceName },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NothingSilver
+                )
+                if (state.glyphSupported && !state.glyphConnected) {
                     Text(
-                        text = mode.subtitleRu,
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = "На Nothing OS до Android 16 включите отладку Glyph: adb shell settings put global nt_glyph_interface_debug_enable 1",
+                        style = MaterialTheme.typography.labelSmall,
                         color = NothingSilver,
-                        fontSize = 12.sp
+                        modifier = Modifier.padding(top = 4.dp)
                     )
+                }
+            }
+            if (state.glyphSupported && !state.glyphConnected) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(NothingSurface)
+                        .border(1.dp, NothingBorder, RoundedCornerShape(10.dp))
+                        .clickable { onReconnect() }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("btn_glyph_reconnect")
+                ) {
+                    Text(text = "ЕЩЁ РАЗ", style = MaterialTheme.typography.labelLarge, color = NothingWhite)
                 }
             }
         }
@@ -347,7 +362,6 @@ fun GlyphStudioScreen(
 private fun NothingPhone2GlyphSchematic(
     activeSegments: Set<Int>,
     brightness: Int,
-    audioDb: Float,
     isRecording: Boolean,
     onTapSegment: (Int) -> Unit,
     modifier: Modifier = Modifier
@@ -356,9 +370,9 @@ private fun NothingPhone2GlyphSchematic(
 
     Canvas(
         modifier = modifier
-            .clip(RoundedCornerShape(28.dp))
+            .clip(RoundedCornerShape(26.dp))
             .background(Color(0xFF121216))
-            .border(2.dp, NothingBorder, RoundedCornerShape(28.dp))
+            .border(1.dp, NothingBorder, RoundedCornerShape(26.dp))
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
                     val yNorm = offset.y / size.height
@@ -381,34 +395,34 @@ private fun NothingPhone2GlyphSchematic(
         val w = size.width
         val h = size.height
 
-        // Transparent engineering chassis lines
+        // Chassis outline
         drawRoundRect(
             color = NothingBorder.copy(alpha = 0.4f),
             topLeft = Offset(w * 0.08f, h * 0.04f),
             size = Size(w * 0.84f, h * 0.92f),
-            cornerRadius = CornerRadius(22.dp.toPx(), 22.dp.toPx()),
+            cornerRadius = CornerRadius(20.dp.toPx(), 20.dp.toPx()),
             style = Stroke(1.dp.toPx())
         )
 
-        // Dual Camera Pill (IMX890 + JN1)
+        // Dual camera pill (IMX890 + JN1)
         val camCenterX = w * 0.27f
         val camTopY = h * 0.14f
         drawRoundRect(
             color = NothingBlack,
             topLeft = Offset(w * 0.16f, h * 0.08f),
             size = Size(w * 0.22f, h * 0.20f),
-            cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx())
+            cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx())
         )
-        drawCircle(NothingBorder, radius = 12.dp.toPx(), center = Offset(camCenterX, camTopY))
-        drawCircle(NothingBorder, radius = 12.dp.toPx(), center = Offset(camCenterX, camTopY + 30.dp.toPx()))
+        drawCircle(NothingBorder, radius = 10.dp.toPx(), center = Offset(camCenterX, camTopY))
+        drawCircle(NothingBorder, radius = 10.dp.toPx(), center = Offset(camCenterX, camTopY + 26.dp.toPx()))
 
         fun segColor(idx: Int): Color {
             val active = activeSegments.contains(idx)
             return if (active) GlyphLedWarm.copy(alpha = alphaLum) else NothingBorder.copy(alpha = 0.45f)
         }
-        val glowStroke = 6.dp.toPx()
+        val glowStroke = 5.dp.toPx()
 
-        // Segment 0 & 1: Camera Pill Left & Right Arcs
+        // Segments 0 & 1: camera pill arcs
         drawArc(
             color = segColor(0),
             startAngle = 110f,
@@ -428,7 +442,7 @@ private fun NothingPhone2GlyphSchematic(
             style = Stroke(width = glowStroke, cap = StrokeCap.Round)
         )
 
-        // Segment 2: Top-Right Diagonal Nothing Slash
+        // Segment 2: top-right diagonal slash
         drawLine(
             color = segColor(2),
             start = Offset(w * 0.72f, h * 0.18f),
@@ -437,7 +451,7 @@ private fun NothingPhone2GlyphSchematic(
             cap = StrokeCap.Round
         )
 
-        // Segments 3..8: 6-Part Broken Center Wireless Charging C-Ring (Nothing Phone 2 signature!)
+        // Segments 3..8: six-part broken C-ring
         val cRingTopLeft = Offset(w * 0.20f, h * 0.33f)
         val cRingSize = Size(w * 0.60f, h * 0.33f)
         val arcDefs = listOf(
@@ -460,14 +474,12 @@ private fun NothingPhone2GlyphSchematic(
             )
         }
 
-        // Segment 9: Bottom USB-C Vertical VU / Timer Strip + Dot
+        // Segment 9: bottom USB-C VU strip + dot
         val vuX = w * 0.5f
-        val vuTop = h * 0.73f
-        val vuBottom = h * 0.88f
         drawLine(
             color = segColor(9),
-            start = Offset(vuX, vuTop),
-            end = Offset(vuX, vuBottom),
+            start = Offset(vuX, h * 0.73f),
+            end = Offset(vuX, h * 0.88f),
             strokeWidth = glowStroke,
             cap = StrokeCap.Round
         )
@@ -477,7 +489,7 @@ private fun NothingPhone2GlyphSchematic(
             center = Offset(vuX, h * 0.92f)
         )
 
-        // Segment 10: Red Tally Recording Indicator LED on Right
+        // Segment 10: red tally LED
         val tallyActive = activeSegments.contains(10) || isRecording
         drawCircle(
             color = if (tallyActive) NothingRed else NothingBorder,
